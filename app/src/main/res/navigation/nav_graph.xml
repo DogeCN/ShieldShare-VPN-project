@@ -9,12 +9,12 @@
         android:name="com.example.shieldshare.ui.dashboard.DashboardFragment"
         android:label="Dashboard">
         <action
-            android:id="@+id/action_dashboardFragment_to_settingsFragment"
+            android:id="@+id/action_dashboard_to_settings"
             app:destination="@id/settingsFragment" />
     </fragment>
 
     <fragment
         android:id="@+id/settingsFragment"
-        android:name="com.example.shieldshare.ui.dashboard.SettingsFragment"
+        android:name="com.example.shieldshare.ui.settings.SettingsFragment"
         android:label="Settings" />
 </navigation>

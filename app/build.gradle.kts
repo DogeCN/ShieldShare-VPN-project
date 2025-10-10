@@ -52,8 +52,8 @@ dependencies {
     implementation("androidx.fragment:fragment-ktx:1.8.2")
 
     // Navigation（Fragment jump）
-    implementation(libs.androidx.navigation.fragment.ktx)
-    implementation(libs.androidx.navigation.ui.ktx)
+    implementation("androidx.navigation:navigation-fragment-ktx:2.7.7")
+    implementation("androidx.navigation:navigation-ui-ktx:2.7.7")
 
     // WorkManager & Room
     implementation("androidx.work:work-runtime-ktx:2.9.0")

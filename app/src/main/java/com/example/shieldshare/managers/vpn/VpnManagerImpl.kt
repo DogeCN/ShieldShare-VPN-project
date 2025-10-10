@@ -10,7 +10,7 @@ class VpnManagerImpl(private val context: Context) : VpnManager {
         val i = Intent(context, VpnPermissionActivity::class.java)
             .putExtra(VpnPermissionActivity.EXTRA_CONFIG, config)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(i)  // 注意是 startActivity（首字母大写 A）
+        context.startActivity(i)  //
     }
 
     override fun stop() {

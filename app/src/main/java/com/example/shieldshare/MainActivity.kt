@@ -5,6 +5,7 @@ import androidx.appcompat.app.AppCompatActivity
 import com.example.shieldshare.databinding.ActivityMainBinding
 import dagger.hilt.android.AndroidEntryPoint
 
+
 @AndroidEntryPoint
 class MainActivity : AppCompatActivity() {
 
