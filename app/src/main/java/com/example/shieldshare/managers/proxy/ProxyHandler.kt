@@ -1,0 +1,50 @@
+package com.example.shieldshare.managers.proxy
+
+import com.example.shieldshare.managers.meter.TrafficMeter
+import java.net.Socket
+
+/**
+ * Abstract Proxy Handler
+ * Based on the class diagram specification (Template Method Pattern)
+ */
+abstract class ProxyHandler(
+    protected val socket: Socket,
+    protected val trafficMeter: TrafficMeter
+) {
+    /**
+     * Template method that defines the algorithm structure
+     */
+    fun handleConnection() {
+        if (authenticate(socket)) {
+            handleConnectionInternal()
+        } else {
+            // Send authentication error response
+            sendAuthenticationError()
+        }
+    }
+
+    /**
+     * Abstract method to be implemented by subclasses
+     */
+    protected abstract fun handleConnectionInternal()
+
+    /**
+     * Hook method for authentication (can be overridden)
+     */
+    protected open fun authenticate(client: Socket): Boolean = true
+
+    /**
+     * Hook method for recording metrics
+     */
+    protected fun recordMetrics(bytesUp: Long, bytesDown: Long) {
+        // This will be called by subclasses to record traffic
+        // The actual implementation depends on the traffic meter
+    }
+
+    /**
+     * Send authentication error response
+     */
+    protected open fun sendAuthenticationError() {
+        // Default implementation - can be overridden
+    }
+}

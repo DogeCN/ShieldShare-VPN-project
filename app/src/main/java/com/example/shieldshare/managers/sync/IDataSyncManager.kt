@@ -1,0 +1,32 @@
+package com.example.shieldshare.managers.sync
+
+/**
+ * Data Sync Manager Interface
+ * Based on the CSV specification (IDataSyncManager)
+ */
+interface IDataSyncManager {
+    fun enqueueSyncOperation(operation: SyncOperation)
+    suspend fun syncNow(): Result<SyncStatus>
+    fun enableAutoSync(enabled: Boolean)
+    fun getLastSyncTimestamp(): Long?
+}
+
+data class SyncOperation(
+    val operationId: String,
+    val operationType: SyncOperationType,
+    val data: Any,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+enum class SyncOperationType {
+    INSERT,
+    UPDATE,
+    DELETE
+}
+
+enum class SyncStatus {
+    SUCCESS,
+    FAILED,
+    PARTIAL,
+    PENDING
+}

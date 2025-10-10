@@ -1,17 +1,34 @@
 package com.example.shieldshare.managers.vpn
 
-import android.os.Parcelable
-import kotlinx.parcelize.Parcelize
+import java.io.Serializable
 
-@Parcelize
+/**
+ * VPN Configuration data class
+ * Based on the class diagram specification
+ */
 data class VpnConfig(
-    val serverAddress: String = "10.0.2.2", // my vpn server ip（deviec to server）
-    val serverPort: Int = 5555,
-    val sharedSecret: String = "shieldshare",
-    val mtu: Int = 1500,
-    val ipv4Address: String = "10.66.66.2",   // TUN local ip
-    val prefixLength: Int = 24,
-    val dnsServers: List<String> = listOf("1.1.1.1", "8.8.8.8"),
-    val routes: List<String> = listOf(),
-    val captureAll: Boolean = false
-) : Parcelable
+    val serverAddress: String = "",
+    val protocol: VpnProtocol = VpnProtocol.OPENVPN,
+    val credentials: Credentials = Credentials(),
+    val dnsServers: List<String> = listOf("8.8.8.8", "8.8.4.4")
+) : Serializable
+
+data class Credentials(
+    val username: String = "",
+    val password: String = "",
+    val certificate: String? = null
+) : Serializable
+
+enum class VpnProtocol : Serializable {
+    OPENVPN,
+    WIREGUARD,
+    IPSEC
+}
+
+enum class VpnStatus {
+    DISCONNECTED,
+    CONNECTING,
+    CONNECTED,
+    RECONNECTING,
+    FAILED
+}

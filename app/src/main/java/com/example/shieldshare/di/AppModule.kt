@@ -7,6 +7,8 @@ import com.example.shieldshare.managers.hotspot.HotspotManager
 import com.example.shieldshare.managers.hotspot.HotspotManagerImpl
 import com.example.shieldshare.managers.proxy.ProxyServer
 import com.example.shieldshare.managers.proxy.ProxyServerImpl
+import com.example.shieldshare.managers.meter.TrafficMeter
+import com.example.shieldshare.managers.meter.TrafficMeterNoop
 import com.example.shieldshare.managers.sync.SyncManager
 import com.example.shieldshare.managers.sync.SyncManagerNoop
 import com.example.shieldshare.managers.vpn.VpnManager
@@ -34,10 +36,17 @@ object AppModule {
     fun provideVpnManager(@ApplicationContext ctx: Context): VpnManager = VpnManagerImpl(ctx)
 
     @Provides @Singleton
+    fun provideTrafficMeter(): TrafficMeter = TrafficMeterNoop()
+
+    @Provides @Singleton
     fun provideHotspotManager(@ApplicationContext ctx: Context): HotspotManager = HotspotManagerImpl(ctx)
 
     @Provides @Singleton
-    fun provideProxyServer(@ApplicationContext ctx: Context): ProxyServer = ProxyServerImpl(ctx)
+    fun provideProxyServer(
+        @ApplicationContext context: Context,
+        trafficMeter: TrafficMeter,
+        vpnManager: VpnManager
+    ): ProxyServer = ProxyServerImpl(context, trafficMeter, vpnManager)
 
     @Provides @Singleton
     fun provideSyncManager(): SyncManager = SyncManagerNoop()
