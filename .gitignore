@@ -15,10 +15,10 @@
 local.properties
 
 # Local development convenience scripts
-run-android.bat
 
-# IDE-specific files that may cause team conflicts
+# IDE-specific files that may cause team conflicts and personal reference files
 .idea/deploymentTargetSelector.xml
 .idea/gradle.xml
 .idea/misc.xml
 .ref
+run-android.bat
