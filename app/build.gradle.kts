@@ -6,6 +6,16 @@ plugins {
     id("kotlin-parcelize")
 }
 
+kotlin {
+    jvmToolchain(17)
+}
+
+kapt {
+    arguments {
+        arg("room.skipVerification", "true")
+    }
+}
+
 android {
     namespace = "com.example.shieldshare"
     compileSdk = 34
@@ -72,6 +82,11 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }
 
-kotlin {
-    jvmToolchain(17)
+// Ensure kapt's worker JVM writes sqlite temp files to a user-writable directory
+val userTempDir = System.getenv("TEMP") ?: System.getenv("TMP") ?: "${project.rootDir}/build/tmp"
+tasks.withType(org.jetbrains.kotlin.gradle.internal.KaptWithoutKotlincTask::class.java).configureEach {
+    kaptProcessJvmArgs.addAll(listOf(
+        "-Djava.io.tmpdir=${userTempDir}",
+        "-Dorg.sqlite.tmpdir=${userTempDir}"
+    ))
 }
