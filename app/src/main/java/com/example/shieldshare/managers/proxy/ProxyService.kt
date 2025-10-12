@@ -1,7 +1,11 @@
 package com.example.shieldshare.managers.proxy
 
+import java.net.Socket
+
+/** Manages HTTP/HTTPS and SOCKS5 proxy server operations and client connections */
 interface ProxyServer {
-    fun start()
-    fun stop()
-    val isRunning: Boolean
+    suspend fun startProxy(config: ProxyConfig): Result<ProxyInstance>
+    suspend fun stopProxy(): Result<Unit>
+    fun getProxyInfo(): ProxyInfo
+    fun handleClientConnection(socket: Socket)
 }

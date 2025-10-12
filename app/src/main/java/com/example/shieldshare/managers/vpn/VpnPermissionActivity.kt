@@ -15,7 +15,7 @@ class VpnPermissionActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val cfg = intent.getParcelableExtra<VpnConfig>(EXTRA_CONFIG) ?: VpnConfig()
+        val cfg = intent.getSerializableExtra(EXTRA_CONFIG) as? VpnConfig ?: VpnConfig()
         val prepare = VpnService.prepare(this)
         if (prepare != null) {
             startActivityForResult(prepare, REQ_PREPARE)
@@ -26,7 +26,7 @@ class VpnPermissionActivity : ComponentActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        val cfg = intent.getParcelableExtra<VpnConfig>(EXTRA_CONFIG) ?: VpnConfig()
+        val cfg = intent.getSerializableExtra(EXTRA_CONFIG) as? VpnConfig ?: VpnConfig()
         if (requestCode == REQ_PREPARE && resultCode == Activity.RESULT_OK) {
             startVpn(cfg)
         }
@@ -35,7 +35,7 @@ class VpnPermissionActivity : ComponentActivity() {
 
     private fun startVpn(cfg: VpnConfig) {
         val i = Intent(this, VpnTunnelService::class.java)
-            .putExtra(EXTRA_CONFIG, cfg)
+            .putExtra(EXTRA_CONFIG, cfg as java.io.Serializable)
         startService(i)
         if (vpnManager is VpnManagerImpl) (vpnManager as VpnManagerImpl).markRunning(true)
     }

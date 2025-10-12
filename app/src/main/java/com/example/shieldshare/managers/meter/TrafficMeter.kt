@@ -1,12 +1,16 @@
 package com.example.shieldshare.managers.meter
 
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flowOf
-
+/** Records and tracks network traffic statistics for connected clients */
 interface TrafficMeter {
-    fun bytesFlow(): Flow<Long>
+    fun recordTraffic(clientIp: String, bytesUp: Long, bytesDown: Long)
+    fun getCurrentStats(): List<ClientTrafficStats>
+    fun getHistoricalStats(timeRange: TimeRange): List<ClientTrafficStats>
+    fun mapIpToMac(): Map<String, String>
 }
 
 class TrafficMeterNoop : TrafficMeter {
-    override fun bytesFlow(): Flow<Long> = flowOf(0L)
+    override fun recordTraffic(clientIp: String, bytesUp: Long, bytesDown: Long) {}
+    override fun getCurrentStats(): List<ClientTrafficStats> = emptyList()
+    override fun getHistoricalStats(timeRange: TimeRange): List<ClientTrafficStats> = emptyList()
+    override fun mapIpToMac(): Map<String, String> = emptyMap()
 }

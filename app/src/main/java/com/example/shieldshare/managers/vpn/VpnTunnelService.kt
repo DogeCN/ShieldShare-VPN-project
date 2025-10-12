@@ -16,19 +16,29 @@ class VpnTunnelService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
-        startForeground(1, NotificationCompat.Builder(this, ensureChannel())
-            .setContentTitle("ShieldShare VPN")
-            .setContentText("VPN service placeholder")
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentIntent(PendingIntent.getActivity(
-                this, 0, Intent(this, MainActivity::class.java),
-                PendingIntent.FLAG_UPDATE_CURRENT or
-                        if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0
-            )).build())
+        startForeground(
+                1,
+                NotificationCompat.Builder(this, ensureChannel())
+                        .setContentTitle("ShieldShare VPN")
+                        .setContentText("VPN service running")
+                        .setSmallIcon(R.drawable.ic_launcher_foreground)
+                        .setContentIntent(
+                                PendingIntent.getActivity(
+                                        this,
+                                        0,
+                                        Intent(this, MainActivity::class.java),
+                                        PendingIntent.FLAG_UPDATE_CURRENT or
+                                                if (Build.VERSION.SDK_INT >= 23)
+                                                        PendingIntent.FLAG_IMMUTABLE
+                                                else 0
+                                )
+                        )
+                        .build()
+        )
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // TODO
+        // VPN tunnel implementation pending - Hanchen's task
         return START_STICKY
     }
 
@@ -45,12 +55,13 @@ class VpnTunnelService : VpnService() {
 
 // notification
 private const val CHANNEL_ID = "vpn"
+
 private fun Service.ensureChannel(): String {
     if (Build.VERSION.SDK_INT >= 26) {
         val mgr = getSystemService(NotificationManager::class.java)
         if (mgr.getNotificationChannel(CHANNEL_ID) == null) {
             mgr.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "VPN", NotificationManager.IMPORTANCE_LOW)
+                    NotificationChannel(CHANNEL_ID, "VPN", NotificationManager.IMPORTANCE_LOW)
             )
         }
     }

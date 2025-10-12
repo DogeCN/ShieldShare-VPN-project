@@ -13,3 +13,13 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Local development convenience scripts
+
+# IDE-specific files that may cause team conflicts and personal reference files
+.idea/deploymentTargetSelector.xml
+.idea/gradle.xml
+.idea/misc.xml
+.vscode/
+run-android.bat
+.ref
