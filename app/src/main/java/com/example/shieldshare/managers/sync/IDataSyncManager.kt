@@ -1,9 +1,6 @@
 package com.example.shieldshare.managers.sync
 
-/**
- * Data Sync Manager Interface
- * Based on the CSV specification (IDataSyncManager)
- */
+/** Manages data synchronization operations and auto-sync functionality */
 interface IDataSyncManager {
     fun enqueueSyncOperation(operation: SyncOperation)
     suspend fun syncNow(): Result<SyncStatus>
@@ -12,10 +9,10 @@ interface IDataSyncManager {
 }
 
 data class SyncOperation(
-    val operationId: String,
-    val operationType: SyncOperationType,
-    val data: Any,
-    val timestamp: Long = System.currentTimeMillis()
+        val operationId: String,
+        val operationType: SyncOperationType,
+        val data: Any,
+        val timestamp: Long = System.currentTimeMillis()
 )
 
 enum class SyncOperationType {

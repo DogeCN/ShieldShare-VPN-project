@@ -2,10 +2,7 @@ package com.example.shieldshare.managers.vpn
 
 import kotlinx.coroutines.flow.Flow
 
-/**
- * VPN Manager Interface
- * Based on the class diagram specification (IVpnManager)
- */
+/** Manages VPN connections, status monitoring, and connection lifecycle */
 interface VpnManager {
     suspend fun connectVpn(config: VpnConfig): Result<VpnConnection>
     suspend fun disconnectVpn(): Result<Unit>

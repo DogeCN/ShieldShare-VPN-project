@@ -9,7 +9,7 @@ import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.*
 
-/** Proxy Server Implementation Based on the CSV specification (ProxyServerImpl) */
+/** Main proxy server implementation handling HTTP/HTTPS and SOCKS5 protocols */
 class ProxyServerImpl(
         private val context: Context,
         private val trafficMeter: TrafficMeter,

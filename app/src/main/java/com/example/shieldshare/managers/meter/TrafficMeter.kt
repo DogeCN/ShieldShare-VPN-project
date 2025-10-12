@@ -1,11 +1,6 @@
 package com.example.shieldshare.managers.meter
 
-import kotlinx.coroutines.flow.Flow
-
-/**
- * Traffic Meter Interface
- * Based on the class diagram specification (ITrafficMeter)
- */
+/** Records and tracks network traffic statistics for connected clients */
 interface TrafficMeter {
     fun recordTraffic(clientIp: String, bytesUp: Long, bytesDown: Long)
     fun getCurrentStats(): List<ClientTrafficStats>

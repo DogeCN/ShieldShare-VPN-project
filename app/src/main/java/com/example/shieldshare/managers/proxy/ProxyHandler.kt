@@ -3,7 +3,9 @@ package com.example.shieldshare.managers.proxy
 import com.example.shieldshare.managers.meter.TrafficMeter
 import java.net.Socket
 
-/** Abstract Proxy Handler Based on the class diagram specification (Template Method Pattern) */
+/**
+ * Abstract base class for proxy handlers using Template Method pattern for connection processing
+ */
 abstract class ProxyHandler(
         protected val socket: Socket,
         protected val trafficMeter: TrafficMeter

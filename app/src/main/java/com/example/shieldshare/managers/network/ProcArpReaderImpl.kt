@@ -4,10 +4,7 @@ import android.util.Log
 import java.io.BufferedReader
 import java.io.FileReader
 
-/**
- * ARP Reader Implementation using /proc/net/arp
- * Based on the CSV specification (ProcArpReaderImpl)
- */
+/** ARP Reader Implementation using /proc/net/arp for client device identification */
 class ProcArpReaderImpl : IArpReader {
     companion object {
         private const val TAG = "ProcArpReaderImpl"
@@ -21,14 +18,14 @@ class ProcArpReaderImpl : IArpReader {
 
     override fun readArpTable(): Map<String, String> {
         val arpTable = mutableMapOf<String, String>()
-        
+
         try {
             val reader = BufferedReader(FileReader(ARP_FILE_PATH))
             var line: String?
-            
+
             // Skip header line
             reader.readLine()
-            
+
             while (reader.readLine().also { line = it } != null) {
                 val parts = line!!.split("\\s+".toRegex())
                 if (parts.size >= 4) {
@@ -43,7 +40,7 @@ class ProcArpReaderImpl : IArpReader {
         } catch (e: Exception) {
             Log.e(TAG, "Error reading ARP table", e)
         }
-        
+
         return arpTable
     }
 

@@ -6,6 +6,6 @@ interface SyncManager {
 
 class SyncManagerNoop : SyncManager {
     override fun enqueueSync() {
-        // TODO
+        // No-op implementation for basic functionality
     }
 }

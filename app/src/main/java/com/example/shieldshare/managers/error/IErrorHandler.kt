@@ -1,9 +1,6 @@
 package com.example.shieldshare.managers.error
 
-/**
- * Error Handler Interface
- * Based on the CSV specification (IErrorHandler)
- */
+/** Handles application errors, logging, and crash reporting */
 interface IErrorHandler {
     fun handleError(error: Throwable, context: String)
     fun logError(level: LogLevel, message: String)

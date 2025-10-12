@@ -1,12 +1,9 @@
 package com.example.shieldshare.managers.vpn
 
-/**
- * VPN Connection data class
- * Based on the CSV specification
- */
+/** Represents an active VPN connection with status and metadata */
 data class VpnConnection(
-    val connectionId: String,
-    val status: VpnStatus,
-    val connectedAt: Long = System.currentTimeMillis(),
-    val serverAddress: String
+        val connectionId: String,
+        val status: VpnStatus,
+        val connectedAt: Long = System.currentTimeMillis(),
+        val serverAddress: String
 )

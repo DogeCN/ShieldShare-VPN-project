@@ -5,8 +5,8 @@ import java.net.InetAddress
 import java.net.NetworkInterface
 
 /**
- * PAC (Proxy Auto Configuration) File Generator
- * Generates PAC files to automatically configure clients to use the proxy
+ * PAC (Proxy Auto Configuration) File Generator Generates PAC files to automatically configure
+ * clients to use the proxy
  */
 class PacFileGenerator {
     companion object {
@@ -15,9 +15,7 @@ class PacFileGenerator {
         private const val SOCKS5_PROXY_PORT = 1080
     }
 
-    /**
-     * Generate PAC file content for the current hotspot network
-     */
+    /** Generate PAC file content for the current hotspot network */
     fun generatePacFile(): String {
         val gatewayIp = getHotspotGatewayIp()
         val httpProxy = "$gatewayIp:$HTTP_PROXY_PORT"
@@ -52,18 +50,13 @@ function FindProxyForURL(url, host) {
 """.trimIndent()
     }
 
-    /**
-     * Generate PAC file URL for clients to use
-     */
+    /** Generate PAC file URL for clients to use */
     fun getPacFileUrl(): String {
         val gatewayIp = getHotspotGatewayIp()
         return "http://$gatewayIp:$HTTP_PROXY_PORT/proxy.pac"
     }
 
-    /**
-     * Get the hotspot gateway IP address
-     * This is typically 192.168.43.1 for Android hotspots
-     */
+    /** Get the hotspot gateway IP address This is typically 192.168.43.1 for Android hotspots */
     private fun getHotspotGatewayIp(): String {
         return try {
             // Try to get the hotspot gateway IP
@@ -77,7 +70,7 @@ function FindProxyForURL(url, host) {
                         if (address is InetAddress && !address.isLoopbackAddress) {
                             val hostAddress = address.hostAddress
                             if (hostAddress != null && hostAddress.startsWith("192.168.43.")) {
-                                // This is likely the hotspot interface
+                                // Hotspot interface detected
                                 // Return the gateway IP (typically .1)
                                 val parts = hostAddress.split(".")
                                 if (parts.size == 4) {
@@ -96,9 +89,7 @@ function FindProxyForURL(url, host) {
         }
     }
 
-    /**
-     * Generate a simple PAC file for testing
-     */
+    /** Generate a simple PAC file for testing */
     fun generateSimplePacFile(): String {
         val gatewayIp = getHotspotGatewayIp()
         val httpProxy = "$gatewayIp:$HTTP_PROXY_PORT"
@@ -111,9 +102,7 @@ function FindProxyForURL(url, host) {
 """.trimIndent()
     }
 
-    /**
-     * Generate PAC file with authentication
-     */
+    /** Generate PAC file with authentication */
     fun generatePacFileWithAuth(username: String, password: String): String {
         val gatewayIp = getHotspotGatewayIp()
         val httpProxy = "$gatewayIp:$HTTP_PROXY_PORT"

@@ -2,10 +2,7 @@ package com.example.shieldshare.managers.hotspot
 
 import kotlinx.coroutines.flow.Flow
 
-/**
- * Hotspot Manager Interface
- * Based on the class diagram specification (IHotspotManager)
- */
+/** Manages mobile hotspot state, client detection, and connection monitoring */
 interface HotspotManager {
     fun guideUserToEnableHotspot()
     fun detectHotspotState(): HotspotState
@@ -14,17 +11,17 @@ interface HotspotManager {
 }
 
 data class ConnectedClient(
-    val macAddress: String,
-    val ipAddress: String,
-    val hostname: String? = null,
-    val connectionTime: Long = System.currentTimeMillis()
+        val macAddress: String,
+        val ipAddress: String,
+        val hostname: String? = null,
+        val connectionTime: Long = System.currentTimeMillis()
 )
 
 data class HotspotInfo(
-    val ssid: String,
-    val password: String,
-    val ipAddress: String,
-    val isEnabled: Boolean
+        val ssid: String,
+        val password: String,
+        val ipAddress: String,
+        val isEnabled: Boolean
 )
 
 enum class HotspotState {
