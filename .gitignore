@@ -20,5 +20,6 @@ local.properties
 .idea/deploymentTargetSelector.xml
 .idea/gradle.xml
 .idea/misc.xml
+.vscode/
 run-android.bat
 .ref
