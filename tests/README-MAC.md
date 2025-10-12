@@ -38,7 +38,18 @@ Make sure your Android emulator is running with the ShieldShare app installed.
 ### 2. Start the Proxy Server
 In the ShieldShare app, click "Start Proxy Server" button.
 
-### 3. Run the Tests
+### 3. Find Your Device IP (Important!)
+```bash
+# Find your device/emulator IP address
+./tests/find-device-ip.sh
+```
+
+**Common IP addresses:**
+- **Android Emulator**: `10.0.2.2` (default)
+- **Physical Device**: Usually `192.168.x.x` or `10.0.x.x`
+- **Localhost**: `127.0.0.1` (if using port forwarding)
+
+### 4. Run the Tests
 
 #### Basic HTTP Proxy Test
 ```bash
@@ -65,19 +76,25 @@ In the ShieldShare app, click "Start Proxy Server" button.
 ./tests/monitor-proxy-logs.sh
 ```
 
+#### Test with Custom IP (if needed)
+```bash
+# If the default IP (10.0.2.2) doesn't work, use your device's actual IP
+./tests/test-with-custom-ip.sh 192.168.1.100 8080
+```
+
 ## Expected Results
 
-### ✅ Success Indicators:
+### Success Indicators:
 - Proxy server starts without errors
 - Logs show "Proxy server started successfully"
 - Port 8080 is listening
 
-### ⏳ Expected Timeouts:
+### Expected Timeouts:
 - **All tests will timeout** - This is expected behavior!
 - The proxy server is running but needs VPN integration to forward traffic
 - Timeouts confirm the proxy is accepting connections correctly
 
-### 📋 Log Verification:
+### Log Verification:
 Look for these log messages:
 ```
 I ProxyServerImpl: Starting proxy server on port 8080
@@ -108,15 +125,32 @@ brew install curl
 ### Issue: Tests timeout immediately
 **Solution:** This is expected! The proxy server is working correctly but needs VPN integration.
 
+### Issue: "Connection refused" or "No route to host"
+**Solution:** Check your IP address:
+```bash
+# Find your device IP
+./tests/find-device-ip.sh
+
+# Test with the correct IP
+./tests/test-with-custom-ip.sh YOUR_DEVICE_IP 8080
+```
+
+### Issue: "Connection timeout" (not the expected timeout)
+**Solution:** 
+1. Make sure the proxy server is running in the app
+2. Check if the IP address is correct
+3. Verify the port (should be 8080)
+4. Try: `./tests/find-device-ip.sh` to get the correct IP
+
 ## Test Scripts Overview
 
-| Script | Purpose | Expected Result |
-|--------|---------|----------------|
-| `test-proxy-connection.sh` | Basic HTTP proxy test | Timeout (expected) |
-| `test-http-proxy.sh` | HTTP/HTTPS proxy test | Timeout (expected) |
-| `test-socks5-proxy.sh` | SOCKS5 proxy test | Timeout (expected) |
-| `test-http-proxy-emulator.sh` | Emulator IP test | Timeout (expected) |
-| `monitor-proxy-logs.sh` | Log monitoring | Shows proxy logs |
+| Script                        | Purpose               | Expected Result    |
+| ----------------------------- | --------------------- | ------------------ |
+| `test-proxy-connection.sh`    | Basic HTTP proxy test | Timeout (expected) |
+| `test-http-proxy.sh`          | HTTP/HTTPS proxy test | Timeout (expected) |
+| `test-socks5-proxy.sh`        | SOCKS5 proxy test     | Timeout (expected) |
+| `test-http-proxy-emulator.sh` | Emulator IP test      | Timeout (expected) |
+| `monitor-proxy-logs.sh`       | Log monitoring        | Shows proxy logs   |
 
 ## Notes
 
@@ -125,10 +159,6 @@ brew install curl
 - **Traffic metering is pending** - Jialu will implement traffic statistics
 - **The proxy server is ready** for team integration
 
-## Team Integration Status
-
-- ✅ **Carlos's Implementation**: Complete and tested
-- ⏳ **Hanchen's VPN Integration**: Pending
-- ⏳ **Jialu's Traffic Metering**: Pending
+## Team Integration
 
 For detailed integration points, see `team-progress/TEAM_INTEGRATION_POINTS.md`
