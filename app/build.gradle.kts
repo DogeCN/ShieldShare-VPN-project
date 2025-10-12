@@ -84,9 +84,28 @@ dependencies {
 
 // Ensure kapt's worker JVM writes sqlite temp files to a user-writable directory
 val userTempDir = System.getenv("TEMP") ?: System.getenv("TMP") ?: "${project.rootDir}/build/tmp"
+
+// Create tmp directory if it doesn't exist
+tasks.register("createTmpDir") {
+    doLast {
+        val tmpDir = file("${project.rootDir}/build/tmp")
+        if (!tmpDir.exists()) {
+            tmpDir.mkdirs()
+            println("Created tmp directory: ${tmpDir.absolutePath}")
+        }
+    }
+}
+
+// Ensure tmp directory is created before any compilation tasks
 tasks.withType(org.jetbrains.kotlin.gradle.internal.KaptWithoutKotlincTask::class.java).configureEach {
+    dependsOn("createTmpDir")
     kaptProcessJvmArgs.addAll(listOf(
         "-Djava.io.tmpdir=${userTempDir}",
         "-Dorg.sqlite.tmpdir=${userTempDir}"
     ))
+}
+
+// Also ensure tmp directory is created for other compilation tasks
+tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile::class.java).configureEach {
+    dependsOn("createTmpDir")
 }

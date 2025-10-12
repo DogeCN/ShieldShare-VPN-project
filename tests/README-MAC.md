@@ -2,6 +2,15 @@
 
 ## Prerequisites
 
+### 0. Setup Build Directories (Important!)
+```bash
+# Create necessary build directories
+./setup-build-dirs.sh
+
+# Or manually create the directory
+mkdir -p build/tmp
+```
+
 ### 1. Install curl (if not already installed)
 ```bash
 # Using Homebrew (recommended)
@@ -114,6 +123,17 @@ export PATH=$PATH:$HOME/Library/Android/sdk/platform-tools
 **Solution:** Make scripts executable:
 ```bash
 chmod +x tests/*.sh
+chmod +x setup-build-dirs.sh
+```
+
+### Issue: "Build failed - tmp directory not found"
+**Solution:** Create the required build directories:
+```bash
+# Run the setup script
+./setup-build-dirs.sh
+
+# Or manually create the directory
+mkdir -p build/tmp
 ```
 
 ### Issue: "curl: command not found"
