@@ -80,6 +80,11 @@ dependencies {
 
     // internet
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // Test dependencies
+    testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test.ext:junit:1.1.5")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
 }
 
 // Ensure kapt's worker JVM writes sqlite temp files to a user-writable directory
