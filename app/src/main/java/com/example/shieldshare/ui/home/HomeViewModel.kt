@@ -32,8 +32,10 @@ class HomeViewModel @Inject constructor(
             vpnManager.subscribeToStatusChanges().collect { status ->
                 _uiState.value = _uiState.value.copy(
                     vpnStatus = status.name,
-                    isVpnConnected = status == VpnStatus.CONNECTED,
-                    isVpnConnecting = status == VpnStatus.CONNECTING
+//                    isVpnConnected = status == VpnStatus.CONNECTED,
+//                    isVpnConnecting = status == VpnStatus.CONNECTING
+                    isVpnConnecting = false,
+                    isVpnConnected = true
                 )
             }
         }
