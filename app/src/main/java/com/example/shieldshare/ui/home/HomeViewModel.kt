@@ -1,8 +1,9 @@
-package com.example.shieldshare.ui.dashboard
+package com.example.shieldshare.ui.home
 
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.shieldshare.data.prefs.AppPrefs
 import com.example.shieldshare.managers.proxy.ProxyConfig
 import com.example.shieldshare.managers.proxy.ProxyServer
 import com.example.shieldshare.managers.proxy.ProxyType
@@ -16,13 +17,14 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
-class DashboardViewModel @Inject constructor(
+class HomeViewModel @Inject constructor(
     private val vpnManager: VpnManager,
-    private val proxyServer: ProxyServer
+    private val proxyServer: ProxyServer,
+    private val appPrefs: AppPrefs
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(DashboardUiState())
-    val uiState: StateFlow<DashboardUiState> = _uiState.asStateFlow()
+    private val _uiState = MutableStateFlow(HomeUiState())
+    val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
     init {
         // Observe VPN status changes
@@ -44,14 +46,14 @@ class DashboardViewModel @Inject constructor(
                 val result = vpnManager.connectVpn(config)
                 result.fold(
                     onSuccess = { connection ->
-                        Log.i("DashboardViewModel", "VPN connected: $connection")
+                        Log.i("HomeViewModel", "VPN connected: $connection")
                     },
                     onFailure = { error ->
-                        Log.e("DashboardViewModel", "Failed to connect VPN", error)
+                        Log.e("HomeViewModel", "Failed to connect VPN", error)
                     }
                 )
             } catch (e: Exception) {
-                Log.e("DashboardViewModel", "Exception connecting VPN", e)
+                Log.e("HomeViewModel", "Exception connecting VPN", e)
             }
         }
     }
@@ -62,14 +64,14 @@ class DashboardViewModel @Inject constructor(
                 val result = vpnManager.disconnectVpn()
                 result.fold(
                     onSuccess = {
-                        Log.i("DashboardViewModel", "VPN disconnected")
+                        Log.i("HomeViewModel", "VPN disconnected")
                     },
                     onFailure = { error ->
-                        Log.e("DashboardViewModel", "Failed to disconnect VPN", error)
+                        Log.e("HomeViewModel", "Failed to disconnect VPN", error)
                     }
                 )
             } catch (e: Exception) {
-                Log.e("DashboardViewModel", "Exception disconnecting VPN", e)
+                Log.e("HomeViewModel", "Exception disconnecting VPN", e)
             }
         }
     }
@@ -77,9 +79,13 @@ class DashboardViewModel @Inject constructor(
     fun startProxyServer() {
         viewModelScope.launch {
             try {
+                // Load proxy settings from AppPrefs
+                val proxyPort = appPrefs.getInt("proxy_port", 8080)
+                val authEnabled = appPrefs.getBoolean("auth_enabled", false)
+                
                 val config = ProxyConfig(
-                    port = 8080,
-                    authEnabled = false,
+                    port = proxyPort,
+                    authEnabled = authEnabled,
                     allowedClients = emptyList(),
                     proxyType = ProxyType.BOTH
                 )
@@ -87,18 +93,18 @@ class DashboardViewModel @Inject constructor(
                 val result = proxyServer.startProxy(config)
                 result.fold(
                     onSuccess = { proxyInstance ->
-                        Log.i("DashboardViewModel", "Proxy server started: $proxyInstance")
+                        Log.i("HomeViewModel", "Proxy server started on port ${config.port}: $proxyInstance")
                         _uiState.value = _uiState.value.copy(
                             isProxyRunning = true,
                             proxyPort = config.port
                         )
                     },
                     onFailure = { error ->
-                        Log.e("DashboardViewModel", "Failed to start proxy server", error)
+                        Log.e("HomeViewModel", "Failed to start proxy server", error)
                     }
                 )
             } catch (e: Exception) {
-                Log.e("DashboardViewModel", "Exception starting proxy server", e)
+                Log.e("HomeViewModel", "Exception starting proxy server", e)
             }
         }
     }
@@ -109,24 +115,24 @@ class DashboardViewModel @Inject constructor(
                 val result = proxyServer.stopProxy()
                 result.fold(
                     onSuccess = {
-                        Log.i("DashboardViewModel", "Proxy server stopped")
+                        Log.i("HomeViewModel", "Proxy server stopped")
                         _uiState.value = _uiState.value.copy(
                             isProxyRunning = false,
                             proxyPort = 0
                         )
                     },
                     onFailure = { error ->
-                        Log.e("DashboardViewModel", "Failed to stop proxy server", error)
+                        Log.e("HomeViewModel", "Failed to stop proxy server", error)
                     }
                 )
             } catch (e: Exception) {
-                Log.e("DashboardViewModel", "Exception stopping proxy server", e)
+                Log.e("HomeViewModel", "Exception stopping proxy server", e)
             }
         }
     }
 }
 
-data class DashboardUiState(
+data class HomeUiState(
     val vpnStatus: String = "DISCONNECTED",
     val isVpnConnected: Boolean = false,
     val isVpnConnecting: Boolean = false,
