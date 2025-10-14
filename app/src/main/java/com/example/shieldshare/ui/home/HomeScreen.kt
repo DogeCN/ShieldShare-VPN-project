@@ -83,7 +83,7 @@ fun HomeScreen(
                 .padding(horizontal = 20.dp)
                 .safeDrawingPadding(),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -103,6 +103,16 @@ fun HomeScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.fillMaxWidth()
                 )
+
+                // TODO: timer is hardcoded, replace when infrastructure is complete
+                if (uiState.isVpnConnected) {
+                    Text(
+                        text = "00:00:00",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                }
             }
 
             // Controls and stats
@@ -194,7 +204,10 @@ fun ConnectButton(
                 .clip(CircleShape)
                 .border(
                     width = 18.dp,
-                    color = MaterialTheme.colorScheme.primary.copy(alpha=0.04f),
+                    color = if (isConnected)
+                        MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.2f)  // Light border when connected
+                    else
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
                     shape = CircleShape
                 )
                 .clip(CircleShape),
@@ -279,18 +292,6 @@ fun StatusCard(
             }
             
             Spacer(modifier = Modifier.height(12.dp))
-            
-            // Connection duration (only show when connected)
-            // TODO: timer is hardcoded, replace when infrastructure is complete
-            if (isConnected) {
-                Text(
-                    text = "00:00:00",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-            }
             
             // Stats
             Row(
