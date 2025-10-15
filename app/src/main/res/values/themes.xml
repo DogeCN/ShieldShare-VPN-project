@@ -1,6 +1,6 @@
 <resources>
-    <!-- AppCompat + MaterialComponents theme -->
-    <style name="Theme.ShieldShare" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+    <!-- Compose theme -->
+    <style name="Theme.ShieldShare" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
     </style>
 </resources>
