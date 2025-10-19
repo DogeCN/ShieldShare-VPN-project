@@ -8,6 +8,8 @@ import com.example.shieldshare.managers.hotspot.HotspotManager
 import com.example.shieldshare.managers.hotspot.HotspotManagerImpl
 import com.example.shieldshare.managers.meter.TrafficMeter
 import com.example.shieldshare.managers.meter.TrafficMeterNoop
+import com.example.shieldshare.managers.network.IpAddressProvider
+import com.example.shieldshare.managers.network.IpAddressProviderImpl
 import com.example.shieldshare.managers.proxy.ProxyServer
 import com.example.shieldshare.managers.proxy.ProxyServerImpl
 import com.example.shieldshare.managers.sync.SyncManager
@@ -19,6 +21,8 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import okhttp3.OkHttpClient
+import java.util.concurrent.TimeUnit
 import javax.inject.Singleton
 
 @Module
@@ -56,5 +60,19 @@ object AppModule {
             vpnManager: VpnManager
     ): ProxyServer = ProxyServerImpl(context, trafficMeter, vpnManager)
 
-    @Provides @Singleton fun provideSyncManager(): SyncManager = SyncManagerNoop()
+    @Provides
+    @Singleton
+    fun provideSyncManager(): SyncManager = SyncManagerNoop()
+
+    @Provides @Singleton
+    fun provideOkHttp(): OkHttpClient =
+        OkHttpClient.Builder()
+            .callTimeout(5, TimeUnit.SECONDS)
+            .connectTimeout(3, TimeUnit.SECONDS)
+            .readTimeout(3, TimeUnit.SECONDS)
+            .build()
+
+    @Provides @Singleton
+    fun provideIpAddressProvider(client: OkHttpClient): IpAddressProvider =
+        IpAddressProviderImpl(client)
 }
