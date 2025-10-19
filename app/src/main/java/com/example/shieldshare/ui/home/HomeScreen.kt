@@ -466,7 +466,7 @@ private fun IpAddressRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 80.dp),
+            .padding(horizontal = 16.dp, vertical = 100.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(text = "IP Address", style = MaterialTheme.typography.bodyMedium)
