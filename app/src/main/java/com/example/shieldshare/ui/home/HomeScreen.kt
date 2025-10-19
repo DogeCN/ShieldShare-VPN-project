@@ -172,8 +172,8 @@ fun HomeScreen(
                         title = "Hotspot",
                         subtitle = "Not configured",
                         isActive = false,
-                        onStart = { /* TODO: Implement hotspot toggle */ },
-                        onStop = { /* TODO: Implement hotspot toggle */ }
+                        onStart = { viewModel.openHotspotSettings() },
+                        onStop  = { viewModel.openHotspotSettings() }
                     )
                 }
             }

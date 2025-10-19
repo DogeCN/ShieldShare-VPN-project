@@ -11,6 +11,7 @@ import java.net.InetAddress
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import android.content.Intent
 
 class HotspotManagerImpl(private val context: Context) : HotspotManager {
     companion object {
@@ -140,6 +141,16 @@ class HotspotManagerImpl(private val context: Context) : HotspotManager {
     override fun guideUserToEnableHotspot() {
         // User guidance for hotspot setup implementation pending
         Log.i(TAG, "Guiding user to enable hotspot")
+        val candidates = listOf(
+            Intent("android.settings.WIFI_TETHER_SETTINGS"),
+            Intent("android.settings.TETHER_SETTINGS"),
+            Intent(android.provider.Settings.ACTION_WIRELESS_SETTINGS),
+            Intent(android.provider.Settings.ACTION_SETTINGS)
+        )
+        for (intent in candidates) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            try { context.startActivity(intent); return } catch (_: Exception) {}
+        }
     }
 
     override fun detectHotspotState(): HotspotState {

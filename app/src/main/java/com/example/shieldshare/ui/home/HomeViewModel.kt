@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.shieldshare.data.prefs.AppPrefs
+import com.example.shieldshare.managers.hotspot.HotspotManager
 import com.example.shieldshare.managers.proxy.ProxyConfig
 import com.example.shieldshare.managers.proxy.ProxyServer
 import com.example.shieldshare.managers.proxy.ProxyType
@@ -20,6 +21,7 @@ import javax.inject.Inject
 class HomeViewModel @Inject constructor(
     private val vpnManager: VpnManager,
     private val proxyServer: ProxyServer,
+    private val hotspotManager: HotspotManager,
     private val appPrefs: AppPrefs
 ) : ViewModel() {
 
@@ -129,6 +131,10 @@ class HomeViewModel @Inject constructor(
                 Log.e("HomeViewModel", "Exception stopping proxy server", e)
             }
         }
+    }
+
+    fun openHotspotSettings() {
+        hotspotManager.guideUserToEnableHotspot()
     }
 }
 
