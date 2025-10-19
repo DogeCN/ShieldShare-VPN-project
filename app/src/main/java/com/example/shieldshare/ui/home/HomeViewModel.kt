@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.shieldshare.data.prefs.AppPrefs
 import com.example.shieldshare.managers.hotspot.HotspotManager
+import com.example.shieldshare.managers.network.IpAddressProvider
 import com.example.shieldshare.managers.proxy.ProxyConfig
 import com.example.shieldshare.managers.proxy.ProxyServer
 import com.example.shieldshare.managers.proxy.ProxyType
@@ -14,6 +15,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -22,7 +24,8 @@ class HomeViewModel @Inject constructor(
     private val vpnManager: VpnManager,
     private val proxyServer: ProxyServer,
     private val hotspotManager: HotspotManager,
-    private val appPrefs: AppPrefs
+    private val appPrefs: AppPrefs,
+    private val ipProvider: IpAddressProvider
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HomeUiState())
@@ -32,11 +35,17 @@ class HomeViewModel @Inject constructor(
         // Observe VPN status changes
         viewModelScope.launch {
             vpnManager.subscribeToStatusChanges().collect { status ->
+                val connected = (status == VpnStatus.CONNECTED)
                 _uiState.value = _uiState.value.copy(
                     vpnStatus = status.name,
                     isVpnConnected = status == VpnStatus.CONNECTED,
                     isVpnConnecting = status == VpnStatus.CONNECTING
                 )
+                if (connected) {
+                    refreshIp() // fresh IP
+                } else {
+                    _uiState.update { it.copy(ipAddress = null) }
+                }
             }
         }
     }
@@ -136,6 +145,18 @@ class HomeViewModel @Inject constructor(
     fun openHotspotSettings() {
         hotspotManager.guideUserToEnableHotspot()
     }
+
+    fun refreshIp() = viewModelScope.launch {
+        if (_uiState.value.isFetchingIp) return@launch
+        _uiState.update { it.copy(isFetchingIp = true) }
+        val res = ipProvider.getPublicIp()
+        _uiState.update {
+            it.copy(
+                isFetchingIp = false,
+                ipAddress = res.getOrNull() // fail
+            )
+        }
+    }
 }
 
 data class HomeUiState(
@@ -145,5 +166,7 @@ data class HomeUiState(
     val isProxyRunning: Boolean = false,
     val proxyPort: Int = 0,
     val activeConnections: Int = 0,
-    val dataTransferred: String = "0 MB"
+    val dataTransferred: String = "0 MB",
+    val ipAddress: String? = null,
+    val isFetchingIp: Boolean = false
 )
