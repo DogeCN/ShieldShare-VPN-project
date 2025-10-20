@@ -96,7 +96,7 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                                Spacer(modifier = Modifier.height(8.dp))
+                                Spacer(modifier = Modifier.height(6.dp))
 
                                 Text(
                                         text = "ShieldShare VPN",
@@ -216,29 +216,21 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
-                                        // Proxy Server Card with QR Code
+                                        // Proxy Server Card with Status Indicator
                                         var showQrDialog by remember { mutableStateOf(false) }
 
-                                        ControlCard(
-                                                modifier = Modifier.weight(1f),
+                                        ProxyStatusCard(
+                                                modifier = Modifier.weight(1f).height(160.dp),
                                                 icon = Icons.Default.Wifi,
                                                 title = "Proxy Server",
                                                 subtitle =
-                                                        if (uiState.isProxyRunning)
+                                                        if (!uiState.isHotspotEnabled)
+                                                                "Hotspot required"
+                                                        else if (uiState.isProxyRunning)
                                                                 "Port ${uiState.proxyPort}"
                                                         else "Not running",
                                                 isActive = uiState.isProxyRunning,
-                                                onStart = {
-                                                        scope.launch {
-                                                                viewModel.startProxyServer()
-                                                        }
-                                                },
-                                                onStop = {
-                                                        scope.launch { viewModel.stopProxyServer() }
-                                                },
-                                                showQrIcon =
-                                                        uiState.isProxyRunning &&
-                                                                uiState.ipAddress != null,
+                                                isDisabled = !uiState.isHotspotEnabled,
                                                 onQrClick = { showQrDialog = true }
                                         )
 
@@ -253,7 +245,7 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
 
                                         // Hotspot Card
                                         ControlCard(
-                                                modifier = Modifier.weight(1f),
+                                                modifier = Modifier.weight(1f).height(160.dp),
                                                 icon = Icons.Default.WifiTethering,
                                                 title = "Hotspot",
                                                 subtitle =
@@ -493,8 +485,7 @@ fun ControlCard(
         isActive: Boolean,
         onStart: () -> Unit,
         onStop: () -> Unit,
-        showQrIcon: Boolean = false,
-        onQrClick: () -> Unit = {}
+        isDisabled: Boolean = false
 ) {
         Card(
                 modifier = modifier,
@@ -505,20 +496,10 @@ fun ControlCard(
                 elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
                 shape = RoundedCornerShape(16.dp)
         ) {
-                Box(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
-                        // QR Code Icon - Top Right
-                        if (showQrIcon) {
-                                IconButton(
-                                        onClick = onQrClick,
-                                        modifier = Modifier.align(Alignment.TopEnd).size(32.dp)
-                                ) {
-                                        Icon(
-                                                imageVector = Icons.Default.QrCode,
-                                                contentDescription = "Show QR Code",
-                                                tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.size(20.dp)
-                                        )
-                                }
+                Box(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                        // Reserve space for alignment (same as ProxyStatusCard)
+                        Box(modifier = Modifier.align(Alignment.TopEnd).size(32.dp)) {
+                                // Empty space for alignment - no QR icon for Hotspot
                         }
 
                         Column(
@@ -531,21 +512,21 @@ fun ControlCard(
                                         tint = MaterialTheme.colorScheme.primary,
                                         modifier = Modifier.size(24.dp)
                                 )
-                                Spacer(modifier = Modifier.height(8.dp))
+                                Spacer(modifier = Modifier.height(6.dp))
                                 Text(
                                         text = title,
                                         style = MaterialTheme.typography.titleSmall,
                                         fontWeight = FontWeight.SemiBold,
                                         color = MaterialTheme.colorScheme.onSurface
                                 )
-                                Spacer(modifier = Modifier.height(4.dp))
+                                Spacer(modifier = Modifier.height(3.dp))
                                 Text(
                                         text = subtitle,
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         textAlign = TextAlign.Center
                                 )
-                                Spacer(modifier = Modifier.height(12.dp))
+                                Spacer(modifier = Modifier.height(8.dp))
                                 Button(
                                         onClick = if (isActive) onStop else onStart,
                                         colors =
@@ -687,4 +668,80 @@ fun QrCodeDialog(onDismiss: () -> Unit, viewModel: HomeViewModel, uiState: HomeU
                 },
                 confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
         )
+}
+
+@Composable
+fun ProxyStatusCard(
+        modifier: Modifier = Modifier,
+        icon: ImageVector,
+        title: String,
+        subtitle: String,
+        isActive: Boolean,
+        isDisabled: Boolean = false,
+        onQrClick: () -> Unit = {}
+) {
+        Card(
+                modifier = modifier,
+                colors =
+                        CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.onTertiary
+                        ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                shape = RoundedCornerShape(16.dp)
+        ) {
+                Box(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                        // Reserve space for alignment (same as ControlCard)
+                        Box(modifier = Modifier.align(Alignment.TopEnd).size(32.dp)) {
+                                // Empty space for alignment
+                        }
+
+                        Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                                Icon(
+                                        imageVector = icon,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                        text = title,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(modifier = Modifier.height(3.dp))
+                                Text(
+                                        text = subtitle,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                // QR Code Icon (replaces status indicator)
+                                IconButton(
+                                        onClick = { if (!isDisabled) onQrClick() },
+                                        enabled = !isDisabled,
+                                        modifier = Modifier.size(48.dp)
+                                ) {
+                                        Icon(
+                                                imageVector = Icons.Default.QrCode,
+                                                contentDescription =
+                                                        if (isDisabled)
+                                                                "QR Code disabled - Hotspot required"
+                                                        else "Show QR Code",
+                                                tint =
+                                                        if (isDisabled)
+                                                                MaterialTheme.colorScheme
+                                                                        .onSurfaceVariant
+                                                        else MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(32.dp)
+                                        )
+                                }
+                        }
+                }
+        }
 }

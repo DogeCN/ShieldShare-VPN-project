@@ -3,13 +3,17 @@ package com.example.shieldshare.ui.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.shieldshare.data.prefs.AppPrefs
+import com.example.shieldshare.managers.network.IpAddressProvider
 import com.example.shieldshare.managers.proxy.ProxyServer
 import com.example.shieldshare.managers.vpn.VpnManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 @HiltViewModel
@@ -18,14 +22,45 @@ class SettingsViewModel
 constructor(
         private val appPrefs: AppPrefs,
         private val vpnManager: VpnManager,
-        private val proxyServer: ProxyServer
+        private val proxyServer: ProxyServer,
+        private val ipProvider: IpAddressProvider
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
+    private var ipAutoJob: Job? = null
+    private val ipRefreshIntervalMs = 30_000L // refresh every 30 sec
+
     init {
         loadSettings()
+        refreshVpnIp()
+
+        // Monitor VPN status changes and auto-refresh IP
+        viewModelScope.launch {
+            vpnManager.subscribeToStatusChanges().collect { status ->
+                val connected = (status == com.example.shieldshare.managers.vpn.VpnStatus.CONNECTED)
+                if (connected) {
+                    refreshVpnIp() // refresh IP immediately
+                    if (ipAutoJob?.isActive != true) {
+                        ipAutoJob =
+                                viewModelScope.launch {
+                                    // refresh it when it starts
+                                    refreshVpnIp()
+                                    // refresh it as time we set
+                                    while (isActive) {
+                                        delay(ipRefreshIntervalMs)
+                                        refreshVpnIp()
+                                    }
+                                }
+                    }
+                } else {
+                    // when disconnect, stop auto-refresh and clear IP
+                    ipAutoJob?.cancel()
+                    _uiState.value = _uiState.value.copy(vpnServerAddress = "")
+                }
+            }
+        }
     }
 
     private fun loadSettings() {
@@ -80,6 +115,21 @@ constructor(
     fun updateNotificationsEnabled(enabled: Boolean) {
         _uiState.value = _uiState.value.copy(notificationsEnabled = enabled)
     }
+
+    fun refreshVpnIp() =
+            viewModelScope.launch {
+                try {
+                    val result = ipProvider.getPublicIp()
+                    if (result.isSuccess) {
+                        val vpnIp = result.getOrNull()
+                        if (vpnIp != null) {
+                            _uiState.value = _uiState.value.copy(vpnServerAddress = vpnIp)
+                        }
+                    }
+                } catch (e: Exception) {
+                    // Keep current server address if IP fetch fails
+                }
+            }
 
     fun saveSettings() {
         viewModelScope.launch {

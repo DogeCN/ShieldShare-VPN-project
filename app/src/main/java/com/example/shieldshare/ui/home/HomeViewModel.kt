@@ -240,6 +240,18 @@ constructor(
                                 activeConnections = clientCount // Update active connections too
                         )
                     }
+
+                    // Auto-manage proxy based on hotspot state
+                    val currentState = _uiState.value
+                    if (isEnabled && !currentState.isProxyRunning) {
+                        // Hotspot is on but proxy is off - start proxy
+                        Log.d("HomeViewModel", "Hotspot enabled, starting proxy automatically")
+                        startProxyServer()
+                    } else if (!isEnabled && currentState.isProxyRunning) {
+                        // Hotspot is off but proxy is on - stop proxy
+                        Log.d("HomeViewModel", "Hotspot disabled, stopping proxy automatically")
+                        stopProxyServer()
+                    }
                 } catch (e: Exception) {
                     Log.e("HomeViewModel", "Error monitoring hotspot", e)
                 }

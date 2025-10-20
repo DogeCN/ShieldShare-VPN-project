@@ -44,12 +44,21 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
                             fontWeight = FontWeight.SemiBold
                     )
 
-                    OutlinedTextField(
-                            value = uiState.vpnServerAddress,
-                            onValueChange = viewModel::updateVpnServerAddress,
-                            label = { Text("Server Address") },
-                            modifier = Modifier.fillMaxWidth()
-                    )
+                    Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                                value = uiState.vpnServerAddress,
+                                onValueChange = viewModel::updateVpnServerAddress,
+                                label = { Text("VPN IP Address") },
+                                modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(onClick = { viewModel.refreshVpnIp() }) {
+                            Text("Refresh")
+                        }
+                    }
 
                     OutlinedTextField(
                             value = uiState.vpnUsername,
