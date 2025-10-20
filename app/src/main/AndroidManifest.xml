@@ -25,15 +25,6 @@
             </intent-filter>
         </activity>
 
-        <activity
-            android:name=".managers.vpn.VpnPermissionActivity"
-            android:exported="false" />
-
-        <service
-            android:name=".managers.vpn.VpnTunnelService"
-            android:permission="android.permission.BIND_VPN_SERVICE"
-            android:exported="false" />
-
         <service
             android:name=".managers.proxy.ProxyForegroundService"
             android:exported="false"

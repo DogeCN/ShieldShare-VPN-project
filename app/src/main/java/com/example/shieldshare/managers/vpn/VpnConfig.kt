@@ -2,25 +2,16 @@ package com.example.shieldshare.managers.vpn
 
 import java.io.Serializable
 
-/** VPN connection settings including server, protocol, credentials, and DNS configuration */
+/** to third party VPN  */
 data class VpnConfig(
-        val serverAddress: String = "",
-        val protocol: VpnProtocol = VpnProtocol.OPENVPN,
-        val credentials: Credentials = Credentials(),
-        val dnsServers: List<String> = listOf("8.8.8.8", "8.8.4.4")
+    val thirdPartyPackage: String? = null, // like "com.vpnmaster.android"
+    val note: String? = null               // what it shows
 ) : Serializable
 
-data class Credentials(
-        val username: String = "",
-        val password: String = "",
-        val certificate: String? = null
+data class VpnConnection(
+    val instanceId: String,
+    val config: VpnConfig
 ) : Serializable
-
-enum class VpnProtocol : Serializable {
-    OPENVPN,
-    WIREGUARD,
-    IPSEC
-}
 
 enum class VpnStatus {
     DISCONNECTED,

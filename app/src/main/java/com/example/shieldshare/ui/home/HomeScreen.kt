@@ -115,6 +115,13 @@ fun HomeScreen(
                 }
             }
 
+            // Shows IP Address
+            IpAddressRow(
+                ip = uiState.ipAddress,
+                loading = uiState.isFetchingIp,
+                onRefresh = { viewModel.refreshIp() }
+            )
+
             // Controls and stats
             Column(
                 modifier = Modifier
@@ -172,8 +179,8 @@ fun HomeScreen(
                         title = "Hotspot",
                         subtitle = "Not configured",
                         isActive = false,
-                        onStart = { /* TODO: Implement hotspot toggle */ },
-                        onStop = { /* TODO: Implement hotspot toggle */ }
+                        onStart = { viewModel.openHotspotSettings() },
+                        onStop  = { viewModel.openHotspotSettings() }
                     )
                 }
             }
@@ -446,6 +453,35 @@ fun ControlCard(
                     fontWeight = FontWeight.Medium
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun IpAddressRow(
+    ip: String?,
+    loading: Boolean,
+    onRefresh: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 100.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(text = "IP Address", style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.width(12.dp))
+        if (loading) {
+            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+        } else {
+            Text(
+                text = ip ?: "—",
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        TextButton(onClick = onRefresh, enabled = !loading) {
+            Text("Refresh")
         }
     }
 }
