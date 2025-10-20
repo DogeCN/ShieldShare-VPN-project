@@ -166,50 +166,6 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
                                         latency = uiState.latency
                                 )
 
-                                // Debug Info (temporary)
-                                if (uiState.isProxyRunning) {
-                                        Card(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                colors =
-                                                        CardDefaults.cardColors(
-                                                                containerColor =
-                                                                        MaterialTheme.colorScheme
-                                                                                .errorContainer
-                                                        )
-                                        ) {
-                                                Column(modifier = Modifier.padding(16.dp)) {
-                                                        Text(
-                                                                text = "🔧 Debug Info",
-                                                                style =
-                                                                        MaterialTheme.typography
-                                                                                .titleMedium,
-                                                                fontWeight = FontWeight.Bold
-                                                        )
-                                                        Text(
-                                                                text =
-                                                                        "Config Server: http://${viewModel.getHotspotIp()}:${uiState.proxyPort + 1}/configure",
-                                                                style =
-                                                                        MaterialTheme.typography
-                                                                                .bodySmall,
-                                                                fontFamily =
-                                                                        androidx.compose.ui.text
-                                                                                .font.FontFamily
-                                                                                .Monospace
-                                                        )
-                                                        Text(
-                                                                text =
-                                                                        "Test URL: http://${viewModel.getHotspotIp()}:${uiState.proxyPort + 1}/test",
-                                                                style =
-                                                                        MaterialTheme.typography
-                                                                                .bodySmall,
-                                                                fontFamily =
-                                                                        androidx.compose.ui.text
-                                                                                .font.FontFamily
-                                                                                .Monospace
-                                                        )
-                                                }
-                                        }
-                                }
 
                                 // Control cards
                                 Row(

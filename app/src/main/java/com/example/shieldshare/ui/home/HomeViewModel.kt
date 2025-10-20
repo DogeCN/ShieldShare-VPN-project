@@ -288,8 +288,6 @@ constructor(
                 Log.w("HomeViewModel", "Cannot generate QR code: hotspot IP not available")
                 return null
             }
-            val configPort = proxyPort + 1 // Configuration server runs on proxyPort + 1
-            val configUrl = "http://$hotspotIp:$configPort/configure"
 
             // Create QR code content with direct proxy configuration
             val qrContent =
