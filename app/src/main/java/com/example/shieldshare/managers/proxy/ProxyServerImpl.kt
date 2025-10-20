@@ -6,9 +6,6 @@ import com.example.shieldshare.managers.hotspot.HotspotManager
 import com.example.shieldshare.managers.meter.TrafficMeter
 import com.example.shieldshare.managers.vpn.VpnManager
 import com.example.shieldshare.managers.vpn.VpnStatus
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.io.PrintWriter
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
@@ -64,7 +61,6 @@ class ProxyServerImpl(
                         Log.d(TAG, "Starting connection acceptor coroutine")
                         acceptConnections()
                     }
-
 
                     Result.success(instance)
                 } catch (e: Exception) {
@@ -254,7 +250,4 @@ class ProxyServerImpl(
             }
         }
     }
-
-
-
 }

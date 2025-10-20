@@ -289,13 +289,12 @@ constructor(
                 return null
             }
 
-            // Create QR code content with direct proxy configuration
+            // Create QR code content with both manual and PAC configuration
             val qrContent =
                     """
                 ShieldShare Proxy Configuration
                 
-                Manual Setup Instructions:
-                
+                Method 1 - Manual Setup:
                 Proxy Server: $hotspotIp
                 Port: $proxyPort
                 Type: HTTP/HTTPS
@@ -312,6 +311,20 @@ constructor(
                 2. Configure Proxy → Manual
                 3. Server: $hotspotIp
                 4. Port: $proxyPort
+                
+                Method 2 - PAC Auto-Configuration:
+                PAC URL: http://$hotspotIp:$proxyPort/proxy.pac
+                
+                For Android:
+                1. Go to Settings → Wi-Fi
+                2. Long press your connected network
+                3. Modify → Advanced → Proxy → Auto-Config
+                4. Enter: http://$hotspotIp:$proxyPort/proxy.pac
+                
+                For iOS:
+                1. Settings → Wi-Fi → (i) icon
+                2. Configure Proxy → Auto
+                3. URL: http://$hotspotIp:$proxyPort/proxy.pac
             """.trimIndent()
 
             // Generate QR code bitmap

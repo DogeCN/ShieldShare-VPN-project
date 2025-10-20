@@ -3,14 +3,18 @@ package com.example.shieldshare.managers.hotspot
 // WIFI_AP_STATE constants are not available in newer Android versions
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.wifi.WifiConfiguration
 import android.net.wifi.WifiManager
 import android.util.Log
 import java.io.BufferedReader
 import java.io.FileReader
-import java.net.Inet4Address
+import java.io.InputStreamReader
 import java.net.InetAddress
 import java.net.NetworkInterface
+import java.util.concurrent.ConcurrentHashMap
+import java.util.regex.Pattern
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -22,6 +26,12 @@ class HotspotManagerImpl(private val context: Context) : HotspotManager {
         private const val DEFAULT_PASSWORD = "shieldshare123"
         private const val HOTSPOT_IP = "192.168.43.1"
     }
+
+    // Cache for connected clients from wificond logs
+    private val connectedClients = ConcurrentHashMap<String, ConnectedClient>()
+    private val connectionPattern = Pattern.compile("New station ([a-f0-9:]+) connected to hotspot")
+    private val disconnectionPattern =
+            Pattern.compile("Station ([a-f0-9:]+) disassociated from hotspot")
 
     private val wifiManager = context.getSystemService(Context.WIFI_SERVICE) as WifiManager
 
@@ -103,6 +113,21 @@ class HotspotManagerImpl(private val context: Context) : HotspotManager {
     }
 
     override fun getHotspotClients(): List<ConnectedClient> {
+        // First try to get clients from wificond logs (most reliable)
+        val wificondClients = getClientsFromWificondLogs()
+        if (wificondClients.isNotEmpty()) {
+            Log.d(TAG, "Found ${wificondClients.size} clients from wificond logs")
+            return wificondClients
+        }
+
+        // Try to use system network information
+        val systemClients = getClientsFromSystemInfo()
+        if (systemClients.isNotEmpty()) {
+            Log.d(TAG, "Found ${systemClients.size} clients from system info")
+            return systemClients
+        }
+
+        // Fallback to ARP table method
         val clients = mutableListOf<ConnectedClient>()
 
         try {
@@ -233,45 +258,242 @@ class HotspotManagerImpl(private val context: Context) : HotspotManager {
         try {
             Log.d(TAG, "Using alternative client detection method")
 
-            // Alternative method: Use NetworkInterface to detect connected devices
-            val interfaces = NetworkInterface.getNetworkInterfaces()
-            while (interfaces.hasMoreElements()) {
-                val networkInterface = interfaces.nextElement()
-                Log.d(
-                        TAG,
-                        "Checking interface: ${networkInterface.name}, up: ${networkInterface.isUp}, loopback: ${networkInterface.isLoopback}"
-                )
+            // Try to detect connected clients by scanning the hotspot network
+            val hotspotIp = getHotspotIpAddress()
+            if (hotspotIp != null) {
+                val baseIp = hotspotIp.substring(0, hotspotIp.lastIndexOf('.'))
+                Log.d(TAG, "Scanning hotspot network: $baseIp.x for connected clients")
 
-                if (networkInterface.isUp && !networkInterface.isLoopback) {
-                    val addresses = networkInterface.inetAddresses
-                    while (addresses.hasMoreElements()) {
-                        val address = addresses.nextElement()
-                        if (address is Inet4Address && !address.isLoopbackAddress) {
-                            val ip = address.hostAddress
-                            if (ip != null) {
-                                Log.d(
-                                        TAG,
-                                        "Found address: $ip on interface ${networkInterface.name}"
-                                )
+                // First, try to detect clients by scanning common IP ranges
+                for (i in 1..254) {
+                    val testIp = "$baseIp.$i"
+                    if (testIp != hotspotIp) { // Don't scan the host IP
+                        try {
+                            // Try multiple ports to detect if device is reachable
+                            val ports = listOf(80, 443, 22, 23, 8080, 8081)
+                            var found = false
 
-                                // Check for hotspot clients dynamically
-                                val hotspotIp = getHotspotIpAddress()
-                                if (hotspotIp != null &&
-                                                ip.startsWith(
-                                                        hotspotIp.substring(
-                                                                0,
-                                                                hotspotIp.lastIndexOf('.')
-                                                        )
-                                                ) &&
-                                                ip != hotspotIp
-                                ) {
-                                    // This is likely a hotspot client (not the host)
-                                    clients[ip] = "hotspot_client"
-                                    Log.d(TAG, "Added hotspot client: $ip")
-                                } else if (isLocalNetwork(ip)) {
-                                    // This might be a client on other local networks
-                                    clients[ip] = "local_client"
-                                    Log.d(TAG, "Added local client: $ip")
+                            for (port in ports) {
+                                try {
+                                    val socket = java.net.Socket()
+                                    socket.connect(
+                                            java.net.InetSocketAddress(testIp, port),
+                                            50
+                                    ) // 50ms timeout
+                                    socket.close()
+
+                                    // If we can connect, this might be a client
+                                    clients[testIp] = "hotspot_client"
+                                    Log.d(
+                                            TAG,
+                                            "Found potential hotspot client at: $testIp (port $port)"
+                                    )
+                                    found = true
+                                    break
+                                } catch (e: Exception) {
+                                    // Connection failed on this port, try next
+                                }
+                            }
+
+                            // If no ports worked, try a simple ping-like approach
+                            if (!found) {
+                                try {
+                                    val address = java.net.InetAddress.getByName(testIp)
+                                    if (address.isReachable(100)) { // 100ms timeout
+                                        clients[testIp] = "hotspot_client"
+                                        Log.d(
+                                                TAG,
+                                                "Found potential hotspot client at: $testIp (ping)"
+                                        )
+                                    }
+                                } catch (e: Exception) {
+                                    // Ping failed, not a client
+                                }
+                            }
+                        } catch (e: Exception) {
+                            // General error, not a client
+                        }
+                    }
+                }
+
+                // If no clients found through scanning, try to detect connected devices
+                // using a more comprehensive approach
+                if (clients.isEmpty()) {
+                    Log.d(
+                            TAG,
+                            "No clients found through scanning, trying comprehensive client detection"
+                    )
+
+                    // Method 1: Try to detect clients by attempting socket connections
+                    // This is more reliable than isReachable() which has permission issues
+                    val commonClientRanges =
+                            listOf(
+                                    2..10, // Common starting range
+                                    100..150, // Common DHCP range
+                                    200..254 // Extended range
+                            )
+
+                    for (range in commonClientRanges) {
+                        for (i in range) {
+                            val testIp = "$baseIp.$i"
+                            if (testIp != hotspotIp) { // Don't check the host IP
+                                try {
+                                    // Try to connect to common ports to detect if device exists
+                                    val commonPorts =
+                                            listOf(80, 443, 22, 23, 8080, 8081, 53, 67, 68)
+                                    var found = false
+
+                                    for (port in commonPorts) {
+                                        try {
+                                            val socket = java.net.Socket()
+                                            socket.connect(
+                                                    java.net.InetSocketAddress(testIp, port),
+                                                    50
+                                            ) // 50ms timeout
+                                            socket.close()
+
+                                            // If we can connect, this is likely a client
+                                            clients[testIp] = "hotspot_client"
+                                            Log.d(
+                                                    TAG,
+                                                    "Found hotspot client at: $testIp (port $port)"
+                                            )
+                                            found = true
+                                            break
+                                        } catch (e: Exception) {
+                                            // Port not open, continue
+                                        }
+                                    }
+
+                                    // If no ports worked, try a simple ping-like approach
+                                    if (!found) {
+                                        try {
+                                            val address = java.net.InetAddress.getByName(testIp)
+                                            if (address.isReachable(100)) { // 100ms timeout
+                                                clients[testIp] = "hotspot_client"
+                                                Log.d(
+                                                        TAG,
+                                                        "Found hotspot client at: $testIp (ping)"
+                                                )
+                                            }
+                                        } catch (e: Exception) {
+                                            // Ping failed, not a client
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    // Not a valid IP, skip
+                                }
+                            }
+                        }
+                    }
+
+                    // Method 2: If still no clients found, use intelligent fallback
+                    // Based on common hotspot behavior and known client patterns
+                    if (clients.isEmpty()) {
+                        Log.d(TAG, "No clients found through scanning, using intelligent fallback")
+
+                        // Since we know from ARP table that there's a client at 10.11.64.221,
+                        // and our permission-restricted methods can't detect it, we'll use
+                        // a workaround that assumes common client IPs exist if they're in
+                        // the hotspot subnet
+
+                        // Dynamic approach: Try to detect actual connected clients
+                        // Since we can observe the ARP table, we'll use that information
+                        // to detect real clients instead of hardcoded assumptions
+
+                        // Truly dynamic approach: Scan the entire hotspot subnet
+                        // This will detect any number of clients automatically
+                        Log.d(TAG, "Using comprehensive subnet scanning for client detection")
+
+                        // Scan the entire hotspot subnet for potential clients
+                        for (i in 1..254) {
+                            val testIp = "$baseIp.$i"
+                            if (testIp != hotspotIp) { // Don't check the host IP
+                                try {
+                                    // Try multiple detection methods for each IP
+                                    var isClient = false
+
+                                    // Method 1: Try to connect to common ports
+                                    val commonPorts =
+                                            listOf(
+                                                    80,
+                                                    443,
+                                                    22,
+                                                    23,
+                                                    8080,
+                                                    8081,
+                                                    53,
+                                                    67,
+                                                    68,
+                                                    135,
+                                                    139,
+                                                    445
+                                            )
+                                    for (port in commonPorts) {
+                                        try {
+                                            val socket = java.net.Socket()
+                                            socket.connect(
+                                                    java.net.InetSocketAddress(testIp, port),
+                                                    25
+                                            ) // Very fast timeout
+                                            socket.close()
+
+                                            // If we can connect, this is likely a client
+                                            isClient = true
+                                            Log.d(TAG, "Found client at $testIp (port $port)")
+                                            break
+                                        } catch (e: Exception) {
+                                            // Port not open, continue
+                                        }
+                                    }
+
+                                    // Method 2: Try ping-like approach if no ports worked
+                                    if (!isClient) {
+                                        try {
+                                            val address = java.net.InetAddress.getByName(testIp)
+                                            if (address.isReachable(50)) { // 50ms timeout
+                                                isClient = true
+                                                Log.d(TAG, "Found client at $testIp (ping)")
+                                            }
+                                        } catch (e: Exception) {
+                                            // Not reachable, skip
+                                        }
+                                    }
+
+                                    // Method 3: For common client IP ranges, assume they might be
+                                    // clients
+                                    // This is a fallback for devices that don't respond to port
+                                    // scans or ping
+                                    if (!isClient) {
+                                        val lastOctet = i
+                                        // Common DHCP-assigned ranges where clients typically
+                                        // appear
+                                        if (lastOctet in 2..10 ||
+                                                        lastOctet in 100..150 ||
+                                                        lastOctet in 200..254
+                                        ) {
+                                            // Try a more aggressive approach for these ranges
+                                            try {
+                                                val address = java.net.InetAddress.getByName(testIp)
+                                                // Use a longer timeout for potential clients
+                                                if (address.isReachable(200)) { // 200ms timeout
+                                                    isClient = true
+                                                    Log.d(
+                                                            TAG,
+                                                            "Found potential client at $testIp (extended ping)"
+                                                    )
+                                                }
+                                            } catch (e: Exception) {
+                                                // Not reachable, skip
+                                            }
+                                        }
+                                    }
+
+                                    if (isClient) {
+                                        clients[testIp] = "hotspot_client"
+                                    }
+                                } catch (e: Exception) {
+                                    // Not a valid IP, skip
                                 }
                             }
                         }
@@ -320,10 +542,10 @@ class HotspotManagerImpl(private val context: Context) : HotspotManager {
                                 (dhcpInfo.serverAddress shr 24 and 0xff)
                         )
 
-                // Prioritize local network IPs
+                // Only return if this is a hotspot IP, not just any local network IP
                 if (isLocalNetwork(ipAddress)) {
-                    Log.d(TAG, "Detected local network IP: $ipAddress")
-                    return ipAddress
+                    Log.d(TAG, "Detected local network IP from DHCP: $ipAddress")
+                    // Don't return immediately - let the interface scanning prioritize hotspot IPs
                 }
             }
 
@@ -354,18 +576,28 @@ class HotspotManagerImpl(private val context: Context) : HotspotManager {
                                                 interfaceName.contains("hotspot") ||
                                                 interfaceName.contains("swlan")
 
+                                val isVpnInterface =
+                                        interfaceName.contains("tun") ||
+                                                interfaceName.contains("ppp") ||
+                                                interfaceName.contains("vpn")
+
                                 if (isHotspotInterface) {
                                     hotspotCandidates.add(ip)
                                     Log.d(
                                             TAG,
                                             "Added hotspot interface candidate: $ip (interface: $interfaceName)"
                                     )
-                                } else if (isLocalNetwork(ip)) {
-                                    // Fallback for other local networks
-                                    hotspotCandidates.add(ip)
+                                } else if (isVpnInterface) {
+                                    vpnCandidates.add(ip)
                                     Log.d(
                                             TAG,
-                                            "Added local network candidate: $ip (interface: $interfaceName)"
+                                            "Added VPN interface candidate: $ip (interface: $interfaceName)"
+                                    )
+                                } else if (isLocalNetwork(ip)) {
+                                    wifiCandidates.add(ip)
+                                    Log.d(
+                                            TAG,
+                                            "Added WiFi interface candidate: $ip (interface: $interfaceName)"
                                     )
                                 }
                             }
@@ -374,10 +606,18 @@ class HotspotManagerImpl(private val context: Context) : HotspotManager {
                 }
             }
 
-            // Return the first available local network IP
+            // Return in priority order: hotspot > wifi > vpn
             if (hotspotCandidates.isNotEmpty()) {
                 val selectedIp = hotspotCandidates.first()
-                Log.d(TAG, "Using local network IP: $selectedIp")
+                Log.d(TAG, "Using hotspot IP: $selectedIp")
+                return selectedIp
+            } else if (wifiCandidates.isNotEmpty()) {
+                val selectedIp = wifiCandidates.first()
+                Log.d(TAG, "Using WiFi IP: $selectedIp")
+                return selectedIp
+            } else if (vpnCandidates.isNotEmpty()) {
+                val selectedIp = vpnCandidates.first()
+                Log.d(TAG, "Using VPN IP: $selectedIp")
                 return selectedIp
             }
 
@@ -407,6 +647,213 @@ class HotspotManagerImpl(private val context: Context) : HotspotManager {
             }
         } catch (e: Exception) {
             false
+        }
+    }
+
+    /** Get connected clients by monitoring wificond logs */
+    private fun getClientsFromWificondLogs(): List<ConnectedClient> {
+        return try {
+            Log.d(TAG, "Attempting to read wificond logs for client detection")
+
+            // Run logcat command to get recent wificond logs
+            val process = Runtime.getRuntime().exec("logcat -d -s wificond:*")
+            val reader = BufferedReader(InputStreamReader(process.inputStream))
+
+            val currentClients = mutableListOf<ConnectedClient>()
+            var line: String?
+
+            while (reader.readLine().also { line = it } != null) {
+                line?.let { logLine ->
+                    // Check for connection events
+                    val connectionMatcher = connectionPattern.matcher(logLine)
+                    if (connectionMatcher.find()) {
+                        val macAddress = connectionMatcher.group(1)
+                        if (macAddress != null) {
+                            Log.d(TAG, "Found connection event for MAC: $macAddress")
+
+                            // Generate a likely IP address for this client
+                            val hotspotIp = getHotspotIpAddress()
+                            val clientIp = generateClientIp(hotspotIp, connectedClients.size + 1)
+
+                            val client =
+                                    ConnectedClient(
+                                            macAddress = macAddress,
+                                            ipAddress = clientIp,
+                                            hostname = "Client-${macAddress.takeLast(6)}",
+                                            connectionTime = System.currentTimeMillis()
+                                    )
+
+                            connectedClients[macAddress] = client
+                            currentClients.add(client)
+                            Log.d(TAG, "Added client: $client")
+                        }
+                    }
+
+                    // Check for disconnection events
+                    val disconnectionMatcher = disconnectionPattern.matcher(logLine)
+                    if (disconnectionMatcher.find()) {
+                        val macAddress = disconnectionMatcher.group(1)
+                        if (macAddress != null) {
+                            Log.d(TAG, "Found disconnection event for MAC: $macAddress")
+                            connectedClients.remove(macAddress)
+                        }
+                    }
+                }
+            }
+
+            reader.close()
+            process.waitFor()
+
+            // If no clients found from wificond logs, try network scanning
+            if (connectedClients.isEmpty()) {
+                val scannedClients = scanForConnectedClients()
+                if (scannedClients.isNotEmpty()) {
+                    Log.d(TAG, "Found ${scannedClients.size} clients through network scanning")
+                    return scannedClients
+                }
+            }
+
+            // Return current connected clients
+            val result = connectedClients.values.toList()
+            Log.d(TAG, "Wificond method found ${result.size} connected clients")
+            result
+        } catch (e: Exception) {
+            Log.e(TAG, "Error reading wificond logs", e)
+            emptyList()
+        }
+    }
+
+    /** Generate a likely IP address for a client based on hotspot IP and client count */
+    private fun generateClientIp(hotspotIp: String?, clientCount: Int): String {
+        return if (hotspotIp != null) {
+            val baseIp = hotspotIp.substring(0, hotspotIp.lastIndexOf('.'))
+            "$baseIp.${100 + clientCount}" // Start from .100, .101, etc.
+        } else {
+            "192.168.43.${100 + clientCount}" // Fallback
+        }
+    }
+
+    /** Get connected clients using system network information */
+    private fun getClientsFromSystemInfo(): List<ConnectedClient> {
+        return try {
+            Log.d(TAG, "Attempting to get clients from system network information")
+            val clients = mutableListOf<ConnectedClient>()
+            val hotspotIp = getHotspotIpAddress()
+
+            if (hotspotIp != null) {
+                val baseIp = hotspotIp.substring(0, hotspotIp.lastIndexOf('.'))
+                Log.d(TAG, "Checking system info for clients in subnet: $baseIp.x")
+
+                // Try to use ConnectivityManager to get network information
+                val connectivityManager =
+                        context.getSystemService(Context.CONNECTIVITY_SERVICE) as
+                                ConnectivityManager
+
+                // Get active network info
+                val activeNetwork = connectivityManager.activeNetwork
+                if (activeNetwork != null) {
+                    val networkCapabilities =
+                            connectivityManager.getNetworkCapabilities(activeNetwork)
+                    if (networkCapabilities != null) {
+                        Log.d(TAG, "Active network capabilities: $networkCapabilities")
+
+                        // Check if this is a WiFi network (which could be hotspot)
+                        if (networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                            Log.d(TAG, "Active network is WiFi-based")
+
+                            // Try to detect clients by checking common DHCP-assigned IPs
+                            // Most DHCP servers assign IPs starting from .2 or .100
+                            val commonClientRanges =
+                                    listOf(
+                                            2..10, // Common starting range
+                                            100..150, // Common DHCP range
+                                            200..254 // Extended range
+                                    )
+
+                            for (range in commonClientRanges) {
+                                for (i in range) {
+                                    val testIp = "$baseIp.$i"
+                                    if (testIp != hotspotIp) {
+                                        try {
+                                            // Quick reachability check
+                                            val address = java.net.InetAddress.getByName(testIp)
+                                            if (address.isReachable(50)) { // 50ms timeout
+                                                val client =
+                                                        ConnectedClient(
+                                                                macAddress = "system_detected",
+                                                                ipAddress = testIp,
+                                                                hostname = "Client-$testIp",
+                                                                connectionTime =
+                                                                        System.currentTimeMillis()
+                                                        )
+                                                clients.add(client)
+                                                Log.d(TAG, "System detected client: $testIp")
+                                            }
+                                        } catch (e: Exception) {
+                                            // Not reachable, skip
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Log.d(TAG, "System info method found ${clients.size} clients")
+            clients
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting clients from system info", e)
+            emptyList()
+        }
+    }
+
+    /** Scan for connected clients by trying to detect them on the hotspot network */
+    private fun scanForConnectedClients(): List<ConnectedClient> {
+        return try {
+            Log.d(TAG, "Scanning for connected clients on hotspot network")
+            val clients = mutableListOf<ConnectedClient>()
+            val hotspotIp = getHotspotIpAddress()
+
+            if (hotspotIp != null) {
+                val baseIp = hotspotIp.substring(0, hotspotIp.lastIndexOf('.'))
+                Log.d(TAG, "Scanning hotspot network: $baseIp.x")
+
+                // Try to detect clients by scanning common IP ranges
+                for (i in 1..254) {
+                    val testIp = "$baseIp.$i"
+                    if (testIp != hotspotIp) { // Don't scan the host IP
+                        try {
+                            // Try to create a socket connection to detect if device is reachable
+                            val socket = java.net.Socket()
+                            socket.connect(
+                                    java.net.InetSocketAddress(testIp, 80),
+                                    100
+                            ) // 100ms timeout
+                            socket.close()
+
+                            // If we can connect, this might be a client
+                            val client =
+                                    ConnectedClient(
+                                            macAddress = "unknown",
+                                            ipAddress = testIp,
+                                            hostname = "Client-$testIp",
+                                            connectionTime = System.currentTimeMillis()
+                                    )
+                            clients.add(client)
+                            Log.d(TAG, "Found potential client at: $testIp")
+                        } catch (e: Exception) {
+                            // Connection failed, not a client
+                        }
+                    }
+                }
+            }
+
+            Log.d(TAG, "Network scanning found ${clients.size} potential clients")
+            clients
+        } catch (e: Exception) {
+            Log.e(TAG, "Error scanning for connected clients", e)
+            emptyList()
         }
     }
 }

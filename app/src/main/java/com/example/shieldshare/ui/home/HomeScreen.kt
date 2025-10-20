@@ -166,7 +166,6 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
                                         latency = uiState.latency
                                 )
 
-
                                 // Control cards
                                 Row(
                                         modifier = Modifier.fillMaxWidth(),
@@ -613,6 +612,37 @@ fun QrCodeDialog(onDismiss: () -> Unit, viewModel: HomeViewModel, uiState: HomeU
                                                 Text(
                                                         text =
                                                                 "Configure these settings in your device's Wi-Fi proxy settings",
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color =
+                                                                MaterialTheme.colorScheme
+                                                                        .onSurfaceVariant
+                                                )
+
+                                                Spacer(modifier = Modifier.height(8.dp))
+
+                                                Text(
+                                                        text =
+                                                                "🔄 Alternative: PAC Auto-Configuration",
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color =
+                                                                MaterialTheme.colorScheme
+                                                                        .onSurfaceVariant
+                                                )
+
+                                                Text(
+                                                        text =
+                                                                "PAC URL: http://${viewModel.getHotspotIp()}:${uiState.proxyPort}/proxy.pac",
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.primary,
+                                                        fontFamily =
+                                                                androidx.compose.ui.text.font
+                                                                        .FontFamily.Monospace
+                                                )
+
+                                                Text(
+                                                        text =
+                                                                "Use this URL in your device's Proxy Auto-Configuration settings for automatic setup",
                                                         style = MaterialTheme.typography.bodySmall,
                                                         color =
                                                                 MaterialTheme.colorScheme
