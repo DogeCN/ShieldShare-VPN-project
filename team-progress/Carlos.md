@@ -162,4 +162,64 @@ BUILD SUCCESSFUL in 56s
 
 **Current Behavior:** Proxy server is ready to send traffic metrics to Jialu's implementation
 
+---
+
+### **What Hanchen Has Implemented (Latest Updates)**
+
+#### **VPN-Agnostic Implementation:**
+- **Third-party VPN detection** - `VpnManagerImpl` now detects system VPN status via `ConnectivityManager`
+- **VPN app launching** - Opens third-party VPN apps or system VPN settings
+- **Real-time VPN monitoring** - Network callback-based status updates
+- **IP address auto-refresh** - Updates phone IP when VPN connects/disconnects
+- **Hotspot integration** - Enhanced hotspot management with IP detection
+
+#### **Key Files Updated:**
+- `VpnManagerImpl.kt` - Complete VPN-agnostic implementation
+- `HomeViewModel.kt` - Auto-refresh IP every 30 seconds when VPN active
+- `HomeScreen.kt` - Enhanced UI with IP display and VPN status
+- `VpnConfig.kt` - Added `thirdPartyPackage` field for VPN app detection
+
+### **What Carlos Needs to Do Next:**
+
+#### **1. QR Code Generation (Priority 1)**
+- **Add QR code to HomeScreen** for easy proxy configuration
+- **Generate proxy settings QR** with phone's hotspot IP (already available in UI)
+- **Include PAC file URL** in QR for smart routing
+- **Display QR code** when proxy is running
+
+#### **2. Proxy-VPN Integration Validation (Priority 2)**
+- **Test proxy traffic routing** through third-party VPN apps
+- **Verify egress IP** goes through VPN (not direct connection)
+- **Validate PAC file** routes external traffic only through proxy
+- **Test with popular VPN apps** (NordVPN, ExpressVPN, etc.)
+
+#### **3. Per-User Accounting Enhancement (Priority 3)**
+- **Improve ARP mapping** for reliable client identification
+- **Add proxy authentication** (optional) for user binding
+- **Enhance traffic metering hooks** for Jialu's integration
+- **Client connection tracking** with IP/MAC mapping
+
+#### **4. Interface Binding & PAC Optimization (Priority 4)**
+- **Ensure proxy listens on hotspot interface** (192.168.43.1)
+- **Optimize PAC file routing** (external traffic only, avoid local network)
+- **Test cross-device connectivity** (iOS, Android, Windows, Mac)
+- **Validate proxy configuration** across different client devices
+
+#### **5. Testing & Documentation (Priority 5)**
+- **End-to-end testing** with real VPN apps and client devices
+- **Document setup process** for end users
+- **Create troubleshooting guide** for common issues
+- **Performance testing** with multiple concurrent clients
+
+### **Immediate Action Items for Carlos:**
+
+1. **Add QR code generation** to HomeScreen using the existing IP address
+2. **Test proxy with third-party VPN** to ensure traffic routes correctly
+3. **Enhance client identification** for per-user accounting
+4. **Validate PAC file** works correctly with external traffic routing
+
+### **Minimal Verification Plan**
+
+- Enable third‑party VPN → start proxy → generate QR code → connect client via hotspot → scan QR → configure proxy → browse → verify client egress IP is VPN IP and bytes are recorded by the proxy.
+
 

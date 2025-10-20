@@ -26,11 +26,8 @@ function FindProxyForURL(url, host) {
     // ShieldShare PAC Configuration
     // Generated automatically for hotspot clients
     
-    // Direct access for local network
-    if (isInNet(host, "192.168.43.0", "255.255.255.0") ||
-        isInNet(host, "10.0.0.0", "255.0.0.0") ||
-        isInNet(host, "172.16.0.0", "255.240.0.0") ||
-        isInNet(host, "127.0.0.0", "255.0.0.0")) {
+    // Direct access for local networks (dynamically detected)
+    if (isLocalNetwork(host)) {
         return "DIRECT";
     }
     
@@ -53,11 +50,15 @@ function FindProxyForURL(url, host) {
     /** Generate PAC file URL for clients to use */
     fun getPacFileUrl(): String {
         val gatewayIp = getHotspotGatewayIp()
-        return "http://$gatewayIp:$HTTP_PROXY_PORT/proxy.pac"
+        return if (gatewayIp != null) {
+            "http://$gatewayIp:$HTTP_PROXY_PORT/proxy.pac"
+        } else {
+            "Not available"
+        }
     }
 
-    /** Get the hotspot gateway IP address This is typically 192.168.43.1 for Android hotspots */
-    private fun getHotspotGatewayIp(): String {
+    /** Get the hotspot gateway IP address dynamically */
+    private fun getHotspotGatewayIp(): String? {
         return try {
             // Try to get the hotspot gateway IP
             val interfaces = NetworkInterface.getNetworkInterfaces()
@@ -69,8 +70,8 @@ function FindProxyForURL(url, host) {
                         val address = addresses.nextElement()
                         if (address is InetAddress && !address.isLoopbackAddress) {
                             val hostAddress = address.hostAddress
-                            if (hostAddress != null && hostAddress.startsWith("192.168.43.")) {
-                                // Hotspot interface detected
+                            if (hostAddress != null && isLocalNetwork(hostAddress)) {
+                                // Local network interface detected
                                 // Return the gateway IP (typically .1)
                                 val parts = hostAddress.split(".")
                                 if (parts.size == 4) {
@@ -81,17 +82,40 @@ function FindProxyForURL(url, host) {
                     }
                 }
             }
-            // Fallback to default hotspot gateway
-            "192.168.43.1"
+            null
         } catch (e: Exception) {
             Log.e(TAG, "Error getting hotspot gateway IP", e)
-            "192.168.43.1"
+            null
+        }
+    }
+    
+    /** Check if an IP address is in a local network range */
+    private fun isLocalNetwork(host: String): Boolean {
+        return try {
+            val ip = java.net.InetAddress.getByName(host)
+            val address = ip.address
+            when {
+                // 192.168.x.x
+                address[0] == 192.toByte() && address[1] == 168.toByte() -> true
+                // 10.x.x.x
+                address[0] == 10.toByte() -> true
+                // 172.16.x.x - 172.31.x.x
+                address[0] == 172.toByte() && address[1] in 16..31 -> true
+                // 127.x.x.x (localhost)
+                address[0] == 127.toByte() -> true
+                else -> false
+            }
+        } catch (e: Exception) {
+            false
         }
     }
 
     /** Generate a simple PAC file for testing */
     fun generateSimplePacFile(): String {
         val gatewayIp = getHotspotGatewayIp()
+        if (gatewayIp == null) {
+            return "// PAC file not available - no local network detected"
+        }
         val httpProxy = "$gatewayIp:$HTTP_PROXY_PORT"
 
         return """
@@ -113,8 +137,7 @@ function FindProxyForURL(url, host) {
     // Note: PAC files cannot handle authentication directly
     // Clients must be configured with username/password separately
     
-    if (isInNet(host, "192.168.43.0", "255.255.255.0") ||
-        isInNet(host, "127.0.0.0", "255.0.0.0")) {
+    if (isLocalNetwork(host)) {
         return "DIRECT";
     }
     

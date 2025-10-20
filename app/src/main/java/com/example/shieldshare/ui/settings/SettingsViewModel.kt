@@ -1,23 +1,24 @@
 package com.example.shieldshare.ui.settings
 
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.shieldshare.data.prefs.AppPrefs
 import com.example.shieldshare.managers.proxy.ProxyServer
 import com.example.shieldshare.managers.vpn.VpnManager
 import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import javax.inject.Inject
 
 @HiltViewModel
-class SettingsViewModel @Inject constructor(
-    private val appPrefs: AppPrefs,
-    private val vpnManager: VpnManager,
-    private val proxyServer: ProxyServer
+class SettingsViewModel
+@Inject
+constructor(
+        private val appPrefs: AppPrefs,
+        private val vpnManager: VpnManager,
+        private val proxyServer: ProxyServer
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState())
@@ -29,16 +30,18 @@ class SettingsViewModel @Inject constructor(
 
     private fun loadSettings() {
         viewModelScope.launch {
-            _uiState.value = SettingsUiState(
-                vpnServerAddress = appPrefs.getString("vpn_server_address", "") ?: "",
-                vpnUsername = appPrefs.getString("vpn_username", "") ?: "",
-                vpnPassword = appPrefs.getString("vpn_password", "") ?: "",
-                proxyPort = appPrefs.getInt("proxy_port", 8080),
-                authEnabled = appPrefs.getBoolean("auth_enabled", false),
-                darkMode = appPrefs.getBoolean("dark_mode", false),
-                notificationsEnabled = appPrefs.getBoolean("notifications_enabled", true),
-                databaseEncryption = appPrefs.getBoolean("database_encryption", false)
-            )
+            _uiState.value =
+                    SettingsUiState(
+                            vpnServerAddress = appPrefs.getString("vpn_server_address", "") ?: "",
+                            vpnUsername = appPrefs.getString("vpn_username", "") ?: "",
+                            vpnPassword = appPrefs.getString("vpn_password", "") ?: "",
+                            proxyPort = appPrefs.getInt("proxy_port", 8080),
+                            authEnabled = appPrefs.getBoolean("auth_enabled", false),
+                            darkMode = appPrefs.getBoolean("dark_mode", false),
+                            notificationsEnabled =
+                                    appPrefs.getBoolean("notifications_enabled", true),
+                            databaseEncryption = appPrefs.getBoolean("database_encryption", false)
+                    )
         }
     }
 
@@ -94,12 +97,12 @@ class SettingsViewModel @Inject constructor(
 }
 
 data class SettingsUiState(
-    val vpnServerAddress: String = "",
-    val vpnUsername: String = "",
-    val vpnPassword: String = "",
-    val proxyPort: Int = 8080,
-    val authEnabled: Boolean = false,
-    val darkMode: Boolean = false,
-    val notificationsEnabled: Boolean = true,
-    val databaseEncryption: Boolean = false
+        val vpnServerAddress: String = "",
+        val vpnUsername: String = "",
+        val vpnPassword: String = "",
+        val proxyPort: Int = 8080,
+        val authEnabled: Boolean = false,
+        val darkMode: Boolean = false,
+        val notificationsEnabled: Boolean = true,
+        val databaseEncryption: Boolean = false
 )
