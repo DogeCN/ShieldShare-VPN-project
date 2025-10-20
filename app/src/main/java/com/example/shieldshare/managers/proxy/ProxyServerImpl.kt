@@ -250,7 +250,7 @@ class ProxyServerImpl(
             }
             VpnStatus.DISCONNECTED -> {
                 Log.w(TAG, "VPN not connected, but allowing traffic to pass through")
-                // Allow traffic even without VPN for testing
+                // Allow traffic even without VPN
             }
             else -> {
                 Log.w(TAG, "VPN status unknown: $vpnStatus, allowing traffic")

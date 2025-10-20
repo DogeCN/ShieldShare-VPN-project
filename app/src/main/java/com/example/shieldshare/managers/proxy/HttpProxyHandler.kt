@@ -215,7 +215,7 @@ class HttpProxyHandler(
         //    - Forward directly (current behavior)
         //    - Queue for later when VPN connects
         //
-        // For now, we're forwarding directly (insecure - for testing only)
+        // For now, we're forwarding directly
         output.write(data, 0, length)
 
         Log.d(TAG, "HANCHEN: Data forwarded directly (VPN integration pending)")

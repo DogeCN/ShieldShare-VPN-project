@@ -729,7 +729,7 @@ class HotspotManagerImpl(private val context: Context) : HotspotManager {
             val baseIp = hotspotIp.substring(0, hotspotIp.lastIndexOf('.'))
             "$baseIp.${100 + clientCount}" // Start from .100, .101, etc.
         } else {
-            "192.168.43.${100 + clientCount}" // Fallback
+            "192.168.43.${100 + clientCount}"
         }
     }
 

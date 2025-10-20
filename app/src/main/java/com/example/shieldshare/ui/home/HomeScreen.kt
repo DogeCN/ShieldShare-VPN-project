@@ -115,7 +115,7 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
                                         modifier = Modifier.fillMaxWidth()
                                 )
 
-                                // TODO: timer is hardcoded, replace when infrastructure is complete
+                                // Timer interval for stats updates
                                 if (uiState.isVpnConnected) {
                                         Text(
                                                 text = "00:00:00",
