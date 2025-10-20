@@ -591,7 +591,7 @@ fun QrCodeDialog(onDismiss: () -> Unit, viewModel: HomeViewModel, uiState: HomeU
                                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
                                                 Text(
-                                                        text = "📱 Manual Proxy Setup:",
+                                                        text = "Manual Proxy Setup:",
                                                         style = MaterialTheme.typography.bodySmall,
                                                         fontWeight = FontWeight.Bold,
                                                         color =
@@ -622,7 +622,7 @@ fun QrCodeDialog(onDismiss: () -> Unit, viewModel: HomeViewModel, uiState: HomeU
 
                                                 Text(
                                                         text =
-                                                                "🔄 Alternative: PAC Auto-Configuration",
+                                                                "Alternative: PAC Auto-Configuration",
                                                         style = MaterialTheme.typography.bodySmall,
                                                         fontWeight = FontWeight.Bold,
                                                         color =

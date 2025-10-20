@@ -23,6 +23,7 @@ class ProxyServerImpl(
     }
 
     private var serverSocket: ServerSocket? = null
+    private var webServerSocket: ServerSocket? = null
     private val proxyHandlers = ConcurrentHashMap<String, ProxyHandler>()
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var currentInstance: ProxyInstance? = null
@@ -62,6 +63,9 @@ class ProxyServerImpl(
                         acceptConnections()
                     }
 
+                    // Start web server for auto-configuration
+                    serviceScope.launch { startWebServer(config.port) }
+
                     Result.success(instance)
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to start proxy server", e)
@@ -74,6 +78,9 @@ class ProxyServerImpl(
                 try {
                     serverSocket?.close()
                     serverSocket = null
+
+                    webServerSocket?.close()
+                    webServerSocket = null
 
                     // Stop all active handlers
                     proxyHandlers.values.forEach { handler ->
@@ -249,5 +256,174 @@ class ProxyServerImpl(
                 Log.w(TAG, "VPN status unknown: $vpnStatus, allowing traffic")
             }
         }
+    }
+
+    /** Start web server for auto-configuration page */
+    private suspend fun startWebServer(proxyPort: Int) {
+        try {
+            val hotspotIp = hotspotManager.getHotspotIpAddress()
+            val bindAddress =
+                    if (hotspotIp != null) {
+                        java.net.InetSocketAddress(hotspotIp, proxyPort + 1)
+                    } else {
+                        java.net.InetSocketAddress("0.0.0.0", proxyPort + 1)
+                    }
+
+            webServerSocket =
+                    ServerSocket().apply {
+                        reuseAddress = true
+                        bind(bindAddress)
+                    }
+
+            Log.i(TAG, "Web server started on port ${proxyPort + 1}")
+
+            while (webServerSocket?.isClosed == false) {
+                try {
+                    val clientSocket = webServerSocket?.accept()
+                    if (clientSocket != null) {
+                        serviceScope.launch { handleWebRequest(clientSocket, proxyPort) }
+                    }
+                } catch (e: Exception) {
+                    if (webServerSocket?.isClosed == false) {
+                        Log.e(TAG, "Error accepting web connection", e)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start web server", e)
+        }
+    }
+
+    /** Handle web requests for auto-configuration */
+    private suspend fun handleWebRequest(socket: Socket, proxyPort: Int) {
+        try {
+            val input = socket.getInputStream()
+            val output = socket.getOutputStream()
+
+            val request = input.bufferedReader().readLine()
+            Log.d(TAG, "Web request: $request")
+
+            val hotspotIp = hotspotManager.getHotspotIpAddress() ?: "192.168.43.1"
+
+            val htmlContent = generateAutoConfigPage(hotspotIp, proxyPort)
+            val contentBytes = htmlContent.toByteArray(Charsets.UTF_8)
+
+            // Proper HTTP response format with \r\n line endings
+            val response = StringBuilder()
+            response.append("HTTP/1.1 200 OK\r\n")
+            response.append("Content-Type: text/html; charset=UTF-8\r\n")
+            response.append("Content-Length: ${contentBytes.size}\r\n")
+            response.append("Connection: close\r\n")
+            response.append("\r\n")
+            response.append(htmlContent)
+
+            output.write(response.toString().toByteArray(Charsets.UTF_8))
+            output.flush()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error handling web request", e)
+        } finally {
+            socket.close()
+        }
+    }
+
+    /** Generate auto-configuration HTML page */
+    private fun generateAutoConfigPage(hotspotIp: String, proxyPort: Int): String {
+        return """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ShieldShare Auto-Configuration</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .header { text-align: center; color: #2c3e50; margin-bottom: 30px; }
+        .config-section { margin: 20px 0; padding: 15px; background: #ecf0f1; border-radius: 5px; }
+        .button { background: #3498db; color: white; padding: 12px 24px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; margin: 10px 5px; }
+        .button:hover { background: #2980b9; }
+        .success { background: #27ae60; }
+        .info { background: #f39c12; color: white; padding: 10px; border-radius: 5px; margin: 10px 0; }
+        .manual-config { background: #e8f4f8; padding: 15px; border-radius: 5px; margin: 10px 0; }
+        .code { background: #2c3e50; color: #ecf0f1; padding: 10px; border-radius: 3px; font-family: monospace; }
+        .mini-code { background: #2c3e50; color: #ecf0f1; padding: 5px; border-radius: 3px; font-family: monospace;font-size:9px }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>ShieldShare Auto-Configuration</h1>
+            <p>Configure your device to use ShieldShare proxy automatically</p>
+        </div>
+        
+        <div class="info">
+            <strong>Proxy Server:</strong> $hotspotIp:$proxyPort<br>
+            <strong>PAC URL:</strong> http://$hotspotIp:$proxyPort/proxy.pac
+        </div>
+        
+        <div class="config-section">
+            <h3>One-Click Auto-Configuration</h3>
+            <p>Click the button below to automatically configure your device:</p>
+            <button class="button" onclick="autoConfigure()">Auto-Configure Proxy</button>
+            <button class="button success" onclick="downloadPAC()">Download PAC File</button>
+        </div>
+        
+        <div class="manual-config">
+            <h3>Manual Configuration</h3>
+            <p><strong>For Android:</strong></p>
+            <ol>
+                <li>Go to Settings → Wi-Fi</li>
+                <li>Long press your connected network</li>
+                <li>Modify → Advanced → Proxy → Manual</li>
+                <li>Server: <span class="mini-code">$hotspotIp</span></li>
+                <li>Port: <span class="mini-code">$proxyPort</span></li>
+            </ol>
+            
+            <p><strong>For iOS:</strong></p>
+            <ol>
+                <li>Settings → Wi-Fi → (i) icon</li>
+                <li>Configure Proxy → Manual</li>
+                <li>Server: <span class="mini-code">$hotspotIp</span></li>
+                <li>Port: <span class="mini-code">$proxyPort</span></li>
+            </ol>
+        </div>
+        
+        <div class="config-section">
+            <h3>PAC Auto-Configuration</h3>
+            <p>Use PAC file for automatic proxy routing:</p>
+            <div class="code">http://$hotspotIp:$proxyPort/proxy.pac</div>
+            <p><small>Copy this URL to your device's Proxy Auto-Configuration settings</small></p>
+        </div>
+    </div>
+    
+    <script>
+        function autoConfigure() {
+            // Try to open system proxy settings
+            if (navigator.userAgent.includes('Android')) {
+                alert('Please manually configure proxy in Android Wi-Fi settings:\\n\\nServer: $hotspotIp\\nPort: $proxyPort');
+            } else if (navigator.userAgent.includes('iPhone') || navigator.userAgent.includes('iPad')) {
+                alert('Please manually configure proxy in iOS Wi-Fi settings:\\n\\nServer: $hotspotIp\\nPort: $proxyPort');
+            } else {
+                alert('Auto-configuration not supported on this device.\\nPlease use manual configuration.');
+            }
+        }
+        
+        function downloadPAC() {
+            window.open('http://$hotspotIp:$proxyPort/proxy.pac', '_blank');
+        }
+        
+        // Auto-detect device type and show appropriate instructions
+        document.addEventListener('DOMContentLoaded', function() {
+            const isAndroid = navigator.userAgent.includes('Android');
+            const isIOS = navigator.userAgent.includes('iPhone') || navigator.userAgent.includes('iPad');
+            
+            if (isAndroid || isIOS) {
+                document.querySelector('.info').innerHTML += '<br><strong>Device:</strong> ' + (isAndroid ? 'Android' : 'iOS');
+            }
+        });
+    </script>
+</body>
+</html>
+        """.trimIndent()
     }
 }
