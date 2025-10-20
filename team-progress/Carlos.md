@@ -6,7 +6,7 @@
 
 **Note:** This implementation builds upon Hanchen's excellent VPN foundation in the main branch. See `Hanchen.md` for the base VPN framework.
 
-## **🚨 CURRENT CRITICAL ISSUES**
+## **CURRENT CRITICAL ISSUES**
 
 ### **1. Client Detection Problem (BLOCKING)**
 - **Issue:** Unable to reliably detect connected hotspot clients
@@ -14,30 +14,30 @@
 - **Impact:** App shows incorrect client count (0-5 clients instead of actual count)
 - **Status:** Multiple workarounds attempted, none fully reliable
 
-### **2. Proxy Internet Connectivity (RESOLVED ✅)**
+### **2. Proxy Internet Connectivity (RESOLVED)**
 - **Issue:** Clients cannot access internet when configured to use proxy
-- **Root Cause:** VPN interference was blocking proxy connectivity (not Android firewall)
+- **Root Cause:** VPN interference was blocking proxy connectivity (not Android firewall as I presumed for hours)
 - **Impact:** Proxy server runs but clients cannot connect to it
 - **Status:** **RESOLVED** - VPN disabled, both manual proxy (port 8081) and PAC auto-configuration work perfectly
 
-### **3. VPN Impact on Network Discovery (RESOLVED ✅)**
+### **3. VPN Impact on Network Discovery (RESOLVED)**
 - **Issue:** VPN presence was interfering with hotspot client detection and proxy functionality
 - **Root Cause:** VPN interfaces were being prioritized over hotspot interfaces
 - **Impact:** IP detection, client discovery, and proxy connectivity were all affected
 - **VPN App:** VPN Unlimited (third-party VPN app)
 - **Status:** **RESOLVED** - VPN disabled, proxy and PAC configuration now working correctly
-- **Breakthrough:** After disabling VPN, both manual proxy setup (port 8081) and PAC auto-configuration work perfectly
+- **Solution:** After disabling VPN, both manual proxy setup (port 8081) and PAC auto-configuration work perfectly
 
 ---
 
-## **🎉 MAJOR BREAKTHROUGH - VPN INTERFERENCE RESOLVED**
+## **IMPORTANT NOTE - VPN INTERFERENCE ISSUES**
 
-### **Critical Discovery:**
+### **Discovery:**
 **VPN Unlimited was blocking all proxy functionality!** After disabling the VPN:
-- ✅ **Manual Proxy Setup (Port 8081)** - Working perfectly
-- ✅ **PAC Auto-Configuration** - Working perfectly  
-- ✅ **Client Internet Access** - Working through proxy
-- ✅ **Proxy Server Connectivity** - No more connection timeouts
+- **Manual Proxy Setup (Port 8081)** - Working perfectly
+- **PAC Auto-Configuration** - Working perfectly  
+- **Client Internet Access** - Working through proxy
+- **Proxy Server Connectivity** - No more connection timeouts
 
 ### **Root Cause Analysis:**
 The VPN was interfering with:
@@ -53,7 +53,33 @@ The VPN was interfering with:
 
 ---
 
-## **✅ WHAT CARLOS HAS SUCCESSFULLY IMPLEMENTED**
+## ** Current Status (Quick View)**
+
+- Proxy Server - Working perfectly
+- Manual Proxy Setup - Port 8081 working(It could changed to anything)
+- PAC Auto-Configuration - Working perfectly
+- Client Internet Access - Working through proxy
+- IP Detection - Now correctly using hotspot IP
+- Client Detection - Still needs improvement (permission restrictions)
+
+---
+
+## **VPN Behavior and Impact**
+
+### When VPN is ON (VPN Unlimited):
+- Proxy connectivity from clients fails (connections blocked)
+- Auto-configuration webpage `/configure` becomes unreachable
+- PAC auto-configuration fails to load/apply
+- IP/interface selection may prioritize VPN over hotspot, causing wrong addresses
+
+### When VPN is OFF:
+- Manual proxy on port 8081 works
+- PAC auto-configuration works and clients browse successfully
+- Auto-configuration webpage loads and functions
+- Hotspot IP detection is correct
+- Client detection still limited by Android permissions
+
+## **WHAT CARLOS HAS SUCCESSFULLY IMPLEMENTED**
 
 ### **1. Complete Proxy Server System**
 - **HTTP/HTTPS Proxy Handler** - Full implementation with CONNECT method support
@@ -77,13 +103,11 @@ The VPN was interfering with:
 - **User-Friendly Interface** - QR code dialog with copy-paste instructions
 
 ### **4. VPN-Agnostic Integration**
-- **Third-party VPN Support** - Works with any VPN app (NordVPN, ExpressVPN, etc.)
 - **VPN Status Detection** - Real-time VPN connection monitoring
 - **IP Address Management** - Separate display for hotspot IP and VPN IP
 - **Auto-refresh Logic** - Implements Hanchen's IP refresh mechanism
 
 ### **5. Complete Interface Compliance**
-- All CSV-specified interfaces implemented
 - Proper dependency injection with Hilt
 - Error handling and logging frameworks
 - Data models and enums matching specifications
@@ -264,7 +288,7 @@ BUILD SUCCESSFUL in 56s
 - **Evidence:** IP detection sometimes returns VPN IP instead of hotspot IP
 - **Impact:** QR codes and PAC files may point to wrong IP addresses
 
-## **📋 IMMEDIATE NEXT STEPS**
+## **IMMEDIATE NEXT STEPS**
 
 ### **Priority 1: PAC File Testing**
 - **Test PAC Auto-Configuration** - Verify if PAC URL works for client internet access
@@ -286,7 +310,7 @@ BUILD SUCCESSFUL in 56s
 - **Alternative Ports** - Test other ports that might not be blocked
 - **Reverse Proxy** - Investigate if reverse proxy approach works better
 
-## **🎯 SUCCESS CRITERIA**
+## **SUCCESS CRITERIA**
 
 ### **Minimum Viable Product:**
 1. **PAC File Works** - Clients can access internet using PAC auto-configuration
@@ -300,27 +324,27 @@ BUILD SUCCESSFUL in 56s
 3. **Cross-platform Support** - Works with iOS, Android, Windows, Mac clients
 4. **Performance Optimized** - Handles multiple concurrent clients efficiently
 
-## **📊 CURRENT TESTING STATUS**
+## **CURRENT TESTING STATUS**
 
-### **✅ Working Components:**
+### **Working Components:**
 - Proxy server starts and listens on port 8080
 - QR code generation with proxy configuration
 - VPN status detection and IP management
 - Hotspot detection and basic client monitoring
 - PAC file generation with dynamic routing
 
-### **✅ RESOLVED ISSUES:**
-- ✅ Proxy accessibility from clients (VPN interference resolved)
-- ✅ Manual proxy configuration (port 8081 working)
-- ✅ PAC file auto-configuration (working perfectly)
-- ✅ Client internet access through proxy (working)
+### **RESOLVED ISSUES:**
+- Proxy accessibility from clients (VPN interference resolved)
+- Manual proxy configuration (port 8081 working)
+- PAC file auto-configuration (working perfectly)
+- Client internet access through proxy (working)
 
-### **🔄 Remaining Challenges:**
+### **Remaining Challenges:**
 - Client detection accuracy (shows wrong count due to permission restrictions)
 - Real-time client monitoring (permission restrictions)
 - Alternative client detection methods needed
 
-### **🎯 NEXT PRIORITIES:**
+### **NEXT PRIORITIES:**
 1. **Test PAC Configuration** - Verify PAC auto-configuration works on different client devices
 2. **Client Detection Improvement** - Find alternative methods that don't require root permissions
 3. **VPN Integration Strategy** - Determine best approach for VPN + proxy combination
