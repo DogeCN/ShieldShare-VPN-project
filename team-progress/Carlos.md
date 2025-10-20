@@ -11,21 +11,21 @@
 ### **1. Client Detection Problem (BLOCKING)**
 - **Issue:** Unable to reliably detect connected hotspot clients
 - **Root Cause:** Android permission restrictions prevent reading `/proc/net/arp` table
-- **Impact:** App shows incorrect client count (0-5 clients instead of actual count)
+- **Impact:** App shows incorrect client count (0 client instead of actual count)
 - **Status:** Multiple workarounds attempted, none fully reliable
 
-### **2. Proxy Internet Connectivity (RESOLVED)**
+### **2. Proxy Internet Connectivity**
 - **Issue:** Clients cannot access internet when configured to use proxy
 - **Root Cause:** VPN interference was blocking proxy connectivity (not Android firewall as I presumed for hours)
 - **Impact:** Proxy server runs but clients cannot connect to it
-- **Status:** **RESOLVED** - VPN disabled, both manual proxy (port 8081) and PAC auto-configuration work perfectly
+- **Status:** **RESOLVED WHEN** - VPN disabled, both manual proxy (port 8081) and PAC auto-configuration work perfectly
 
-### **3. VPN Impact on Network Discovery (RESOLVED)**
+### **3. VPN Impact on Network Discovery**
 - **Issue:** VPN presence was interfering with hotspot client detection and proxy functionality
 - **Root Cause:** VPN interfaces were being prioritized over hotspot interfaces
 - **Impact:** IP detection, client discovery, and proxy connectivity were all affected
 - **VPN App:** VPN Unlimited (third-party VPN app)
-- **Status:** **RESOLVED** - VPN disabled, proxy and PAC configuration now working correctly
+- **Status:** **RESOLVED WHEN** - VPN disabled, proxy and PAC configuration now working correctly
 - **Solution:** After disabling VPN, both manual proxy setup (port 8081) and PAC auto-configuration work perfectly
 
 ---
@@ -33,7 +33,7 @@
 ## **IMPORTANT NOTE - VPN INTERFERENCE ISSUES**
 
 ### **Discovery:**
-**VPN Unlimited was blocking all proxy functionality!** After disabling the VPN:
+**VPN Unlimited was blocking all proxy functionality!** But After disabling the VPN:
 - **Manual Proxy Setup (Port 8081)** - Working perfectly
 - **PAC Auto-Configuration** - Working perfectly  
 - **Client Internet Access** - Working through proxy
@@ -46,14 +46,13 @@ The VPN was interfering with:
 3. **Client Detection** - VPN interfaces were interfering with ARP table reading
 4. **IP Address Detection** - VPN IP was being selected instead of hotspot IP
 
-### **Solution:**
+### **Temporal Solution:**
 - **Disable VPN during hotspot operation** for optimal proxy functionality
-- **VPN can be re-enabled after proxy setup** if needed for additional privacy
 - **Both manual and automatic proxy configuration now work perfectly**
 
 ---
 
-## ** Current Status (Quick View)**
+## **Current Status (Quick View)**
 
 - Proxy Server - Working perfectly
 - Manual Proxy Setup - Port 8081 working(It could changed to anything)
@@ -103,8 +102,8 @@ The VPN was interfering with:
 - **User-Friendly Interface** - QR code dialog with copy-paste instructions
 
 ### **4. VPN-Agnostic Integration**
-- **VPN Status Detection** - Real-time VPN connection monitoring
-- **IP Address Management** - Separate display for hotspot IP and VPN IP
+- **Hotspot Status Detection** - Real-time Htospot connection monitoring
+- **IP Address Management** - Separate display for hotspot IP and VPN IP(In the settings page)
 - **Auto-refresh Logic** - Implements Hanchen's IP refresh mechanism
 
 ### **5. Complete Interface Compliance**
@@ -133,13 +132,8 @@ The VPN was interfering with:
 - `HotspotManager.kt` - Hotspot manager interface
 - `ProcArpReaderImpl.kt` - ARP table reading implementation
 
-### **UI Integration:**
-- `DashboardFragment.kt` - UI with proxy server testing buttons
-- `fragment_dashboard.xml` - Dashboard layout with proxy controls
-
 ### **Service Management:**
 - `ProxyForegroundService.kt` - Android foreground service for proxy
-- `VpnTunnelService.kt` - VPN tunnel service (placeholder for Hanchen)
 
 
 
