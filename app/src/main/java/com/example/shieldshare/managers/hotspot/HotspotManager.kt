@@ -8,6 +8,7 @@ interface HotspotManager {
     fun detectHotspotState(): HotspotState
     fun getHotspotClients(): List<ConnectedClient>
     fun subscribeToClientChanges(): Flow<List<ConnectedClient>>
+    fun getHotspotIpAddress(): String?
 }
 
 data class ConnectedClient(

@@ -95,6 +95,9 @@ dependencies {
     // internet
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
+    // QR Code generation
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+
     // Test dependencies
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")

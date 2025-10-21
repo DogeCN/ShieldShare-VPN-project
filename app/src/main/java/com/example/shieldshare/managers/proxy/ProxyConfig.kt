@@ -9,9 +9,9 @@ data class ProxyConfig(
 )
 
 enum class ProxyType {
-    HTTP_HTTPS,
-    SOCKS5,
-    BOTH
+        HTTP_HTTPS,
+        SOCKS5,
+        BOTH
 }
 
 data class ProxyInfo(
