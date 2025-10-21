@@ -224,13 +224,13 @@ constructor(
                             hotspotState ==
                                     com.example.shieldshare.managers.hotspot.HotspotState.ENABLED
 
-                    // Get connected clients
-                    val clients = hotspotManager.getHotspotClients()
-                    val clientCount = clients.size
+                    // Get connected clients from proxy server (IP-based counting)
+                    val proxyInfo = proxyServer.getProxyInfo()
+                    val clientCount = proxyInfo.activeConnections
 
                     Log.d(
                             "HomeViewModel",
-                            "Hotspot state: $hotspotState, enabled: $isEnabled, clients: $clientCount"
+                            "Hotspot state: $hotspotState, enabled: $isEnabled, clients: $clientCount (from proxy server)"
                     )
 
                     _uiState.update {

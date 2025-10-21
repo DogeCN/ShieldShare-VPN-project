@@ -28,6 +28,10 @@ class ProxyServerImpl(
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var currentInstance: ProxyInstance? = null
 
+    // Track unique client IPs for counting
+    private val connectedClients = ConcurrentHashMap<String, Long>() // IP -> timestamp
+    private val CLIENT_TIMEOUT_MS = 5 * 60 * 1000L // 5 minutes timeout
+
     override suspend fun startProxy(config: ProxyConfig): Result<ProxyInstance> =
             withContext(Dispatchers.IO) {
                 try {
@@ -66,6 +70,9 @@ class ProxyServerImpl(
                     // Start web server for auto-configuration
                     serviceScope.launch { startWebServer(config.port) }
 
+                    // Start client cleanup coroutine
+                    serviceScope.launch { startClientCleanup() }
+
                     Result.success(instance)
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to start proxy server", e)
@@ -88,6 +95,9 @@ class ProxyServerImpl(
                     }
                     proxyHandlers.clear()
 
+                    // Clear connected clients
+                    connectedClients.clear()
+
                     currentInstance = null
                     Log.i(TAG, "Proxy server stopped")
                     Result.success(Unit)
@@ -104,7 +114,7 @@ class ProxyServerImpl(
                     isRunning = serverSocket != null && !serverSocket!!.isClosed,
                     port = instance.config.port,
                     proxyType = instance.config.proxyType,
-                    activeConnections = proxyHandlers.size,
+                    activeConnections = connectedClients.size, // Use unique client count
                     pacFileUrl =
                             hotspotManager.getHotspotIpAddress()?.let { hotspotIp ->
                                 "http://$hotspotIp:${instance.config.port}/proxy.pac"
@@ -123,6 +133,11 @@ class ProxyServerImpl(
 
     override fun handleClientConnection(socket: Socket) {
         val clientId = "${socket.remoteSocketAddress}_${System.currentTimeMillis()}"
+
+        // Track unique client IP for counting
+        val clientIp = socket.remoteSocketAddress.toString().substringBefore(':')
+        connectedClients[clientIp] = System.currentTimeMillis()
+        Log.d(TAG, "Tracking client IP: $clientIp (Total unique clients: ${connectedClients.size})")
 
         // Create appropriate handler based on proxy type
         val handler =
@@ -425,5 +440,30 @@ class ProxyServerImpl(
 </body>
 </html>
         """.trimIndent()
+    }
+
+    /** Clean up old client IPs that haven't connected recently */
+    private suspend fun startClientCleanup() {
+        coroutineScope {
+            while (isActive) {
+                try {
+                    val currentTime = System.currentTimeMillis()
+                    val iterator = connectedClients.iterator()
+
+                    while (iterator.hasNext()) {
+                        val (ip, timestamp) = iterator.next()
+                        if (currentTime - timestamp > CLIENT_TIMEOUT_MS) {
+                            iterator.remove()
+                            Log.d(TAG, "Removed stale client IP: $ip")
+                        }
+                    }
+
+                    delay(30_000) // Clean up every 30 seconds
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error in client cleanup", e)
+                    delay(60_000) // Wait longer on error
+                }
+            }
+        }
     }
 }
