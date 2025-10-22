@@ -10,7 +10,6 @@ ShieldShare is an Android application that allows users to share their VPN conne
 This project explores how to extend the functionality of a stock Android phone (without root access) to provide secure, measurable, and shareable internet access. In environments like classrooms, study groups, or small team projects, it is valuable to ensure that shared internet access is protected by a VPN and that each participant's usage can be accounted for.
 
 ### Core Objectives
-- Establish a VPN connection over the phone's cellular radio
 - Enable Wi-Fi hotspot sharing for nearby users
 - Route all shared traffic through the VPN tunnel for privacy and security
 - Provide per-user accounting showing data consumption per connected device
@@ -29,7 +28,7 @@ This project explores how to extend the functionality of a stock Android phone (
 ### Core Components
 - **Proxy Server** - Multi-protocol proxy (HTTP/HTTPS/SOCKS5)
 - **Hotspot Manager** - Android hotspot detection and management
-- **VPN Manager** - Third-party VPN integration
+- **VPN Manager** - Third-party VPN detection
 - **Traffic Meter** - Network usage monitoring
 - **QR Code Generator** - Client configuration automation
 
