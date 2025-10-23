@@ -19,7 +19,6 @@
 
 #### **2. Enhanced Hotspot Management**
 - **Hotspot detection** - Android hotspot state monitoring
-- **Client monitoring** - ARP table reading for connected devices
 - **IP address auto-refresh** - Updates phone IP when VPN connects/disconnects
 - **User guidance** - Opens system hotspot settings for manual enablement
 
@@ -41,7 +40,6 @@
 
 ### **Hotspot Management:**
 - `HotspotManagerImpl.kt` - Enhanced hotspot detection and client monitoring
-- `ProcArpReaderImpl.kt` - ARP table reading for connected devices
 - `IpAddressProvider.kt` - Auto-refresh IP address functionality
 
 ### **UI Integration:**
@@ -60,7 +58,6 @@
 - **Cross-app compatibility** - Works with NordVPN, ExpressVPN, etc.
 
 ### **Hotspot Integration:**
-- **Client detection** - ARP table reading works correctly
 - **IP monitoring** - Hotspot IP detection and display
 - **User guidance** - System settings integration works
 
