@@ -2,14 +2,16 @@ package com.example.shieldshare.managers.proxy
 
 import android.util.Log
 import com.example.shieldshare.managers.meter.TrafficMeter
+import com.example.shieldshare.managers.meter.TrafficMeterSimple
 import java.io.*
 import java.net.*
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.*
 
 /**
- * HTTP/HTTPS Proxy Handler Handles HTTP CONNECT requests for HTTPS tunneling and regular HTTP
- * requests
+ * HTTP/HTTPS Proxy Handler with STAGE 2 Traffic Metering
+ * Handles HTTP CONNECT requests for HTTPS tunneling and regular HTTP requests
+ * Collects detailed traffic data for Jialu's per-device monitoring
  */
 class HttpProxyHandler(
         clientSocket: Socket,
@@ -26,10 +28,24 @@ class HttpProxyHandler(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val bytesUp = AtomicLong(0)
     private val bytesDown = AtomicLong(0)
+    
+    // STAGE 2: Enhanced traffic tracking
+    private val clientIp = clientSocket.remoteSocketAddress.toString().substringAfter("/").substringBefore(":")
+    private var sessionId: String? = null
+    private var userAgent: String? = null
+    private val hostsAccessed = mutableSetOf<String>()
 
     fun start() {
         scope.launch {
             try {
+                // STAGE 2: Start traffic session
+                sessionId = (trafficMeter as? TrafficMeterSimple)?.startSession(
+                    clientIp = clientIp,
+                    protocolType = "HTTP"
+                )
+                
+                Log.i(TAG, "HTTP session started for client: $clientIp (Session: $sessionId)")
+                
                 handleConnection()
             } catch (e: Exception) {
                 Log.e(TAG, "Error handling proxy request", e)
@@ -73,7 +89,7 @@ class HttpProxyHandler(
             url: String
     ) =
             withContext(Dispatchers.IO) {
-                Log.d(TAG, "Handling CONNECT request to: $url")
+                Log.i(TAG, "HTTPS CONNECT request to: $url from $clientIp")
 
                 // Parse host and port from URL
                 val (host, port) = parseHostPort(url)
@@ -81,6 +97,14 @@ class HttpProxyHandler(
                     sendErrorResponse(writer, 400, "Bad Request - Invalid host:port")
                     return@withContext
                 }
+                
+                // STAGE 2: Track target host
+                hostsAccessed.add(host)
+                sessionId?.let { sessionId ->
+                    // TODO: Add updateSessionTarget method to TrafficMeterSimple if needed
+                    // (trafficMeter as? TrafficMeterSimple)?.updateSessionTarget(sessionId, host)
+                }
+                Log.i(TAG, "Client $clientIp accessing: $host:$port")
 
                 // Send 200 Connection Established response
                 writer.println("$HTTP_VERSION 200 Connection Established")
@@ -143,6 +167,12 @@ class HttpProxyHandler(
                 var line: String?
                 while (reader.readLine().also { line = it } != null && line!!.isNotEmpty()) {
                     headers.add(line!!)
+                    
+                    // STAGE 2: Extract User-Agent for device identification
+                    if (line!!.lowercase().startsWith("user-agent:")) {
+                        userAgent = line!!.substringAfter(":").trim()
+                        Log.i(TAG, "User-Agent detected: $userAgent")
+                    }
                 }
 
                 // Forward request to target server
@@ -187,7 +217,21 @@ class HttpProxyHandler(
                     // Should be: Forward through VPN tunnel for encryption
                     forwardThroughVpn(buffer, bytesRead, output)
                     output.flush()
-                    bytesCounter.addAndGet(bytesRead.toLong())
+                    
+                    // STAGE 2: Track bytes and record traffic
+                    val bytes = bytesRead.toLong()
+                    bytesCounter.addAndGet(bytes)
+                    
+                    // Determine if this is upload or download
+                    val isUpload = bytesCounter == bytesUp
+                    
+                    if (isUpload) {
+                        trafficMeter.recordTraffic(clientIp, bytes, 0)
+                        Log.d(TAG, "↑ Upload: $bytes bytes from $clientIp")
+                    } else {
+                        trafficMeter.recordTraffic(clientIp, 0, bytes)
+                        Log.d(TAG, "↓ Download: $bytes bytes to $clientIp")
+                    }
                 }
             }
 
@@ -262,9 +306,35 @@ class HttpProxyHandler(
             Log.e(TAG, "Error closing client socket", e)
         }
 
+        // STAGE 2: End traffic session and log summary
+        sessionId?.let { sessionId ->
+            (trafficMeter as? TrafficMeterSimple)?.endSession(sessionId)
+        }
+        
+        val totalUp = bytesUp.get()
+        val totalDown = bytesDown.get()
+        
+        // Get MAC address for enhanced logging
+        val macAddress = (trafficMeter as? TrafficMeterSimple)?.mapIpToMac()?.get(clientIp) ?: "unknown"
+        
+        Log.i(TAG, "**HTTP session ended** for $clientIp ($macAddress)")
+        Log.i(TAG, "   ↑ **Total Upload**: ${formatBytes(totalUp)}")
+        Log.i(TAG, "   ↓ **Total Download**: ${formatBytes(totalDown)}")
+        Log.i(TAG, "   **Hosts Accessed**: ${hostsAccessed.size} - ${hostsAccessed.joinToString(", ")}")
+        Log.i(TAG, "   **User Agent**: ${userAgent ?: "Unknown"}")
+
         // Report traffic statistics
-        trafficCallback(bytesUp.get(), bytesDown.get())
+        trafficCallback(totalUp, totalDown)
 
         scope.cancel()
+    }
+    
+    private fun formatBytes(bytes: Long): String {
+        return when {
+            bytes < 1024 -> "$bytes B"
+            bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+            bytes < 1024 * 1024 * 1024 -> "${bytes / (1024 * 1024)} MB"
+            else -> "${bytes / (1024 * 1024 * 1024)} GB"
+        }
     }
 }

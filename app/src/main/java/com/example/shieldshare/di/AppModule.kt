@@ -7,7 +7,7 @@ import com.example.shieldshare.data.prefs.AppPrefs
 import com.example.shieldshare.managers.hotspot.HotspotManager
 import com.example.shieldshare.managers.hotspot.HotspotManagerImpl
 import com.example.shieldshare.managers.meter.TrafficMeter
-import com.example.shieldshare.managers.meter.TrafficMeterNoop
+import com.example.shieldshare.managers.meter.TrafficMeterSimple
 import com.example.shieldshare.managers.network.IpAddressProvider
 import com.example.shieldshare.managers.network.IpAddressProviderImpl
 import com.example.shieldshare.managers.proxy.ProxyServer
@@ -44,8 +44,8 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideTrafficMeter(): TrafficMeter =
-            TrafficMeterNoop() // TODO: JIALU - Replace with TrafficMeterImpl
+    fun provideTrafficMeter(@ApplicationContext ctx: Context): TrafficMeter =
+            TrafficMeterSimple(ctx) // STAGE 2: Simple Traffic Metering Implementation
 
     @Provides
     @Singleton

@@ -8,6 +8,7 @@ import com.example.shieldshare.managers.vpn.VpnManager
 import com.example.shieldshare.managers.vpn.VpnStatus
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.InetAddress
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.*
 
@@ -26,6 +27,7 @@ class ProxyServerImpl(
     private var webServerSocket: ServerSocket? = null
     private val proxyHandlers = ConcurrentHashMap<String, ProxyHandler>()
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val clientDetectionScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var currentInstance: ProxyInstance? = null
 
     // Track unique client IPs for counting
@@ -73,6 +75,12 @@ class ProxyServerImpl(
                     // Start client cleanup coroutine
                     serviceScope.launch { startClientCleanup() }
 
+                    // ENHANCEMENT: Start proactive client detection
+                    serviceScope.launch { 
+                        Log.i(TAG, "Starting proactive client detection")
+                        startClientScanning() 
+                    }
+
                     Result.success(instance)
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to start proxy server", e)
@@ -109,12 +117,14 @@ class ProxyServerImpl(
 
     override fun getProxyInfo(): ProxyInfo {
         val instance = currentInstance
+        val clientCount = connectedClients.size
+        Log.d(TAG, "getProxyInfo() called - Connected clients count: $clientCount")
         return if (instance != null) {
             ProxyInfo(
                     isRunning = serverSocket != null && !serverSocket!!.isClosed,
                     port = instance.config.port,
                     proxyType = instance.config.proxyType,
-                    activeConnections = connectedClients.size, // Use unique client count
+                    activeConnections = clientCount, // Use unique client count
                     pacFileUrl =
                             hotspotManager.getHotspotIpAddress()?.let { hotspotIp ->
                                 "http://$hotspotIp:${instance.config.port}/proxy.pac"
@@ -134,10 +144,24 @@ class ProxyServerImpl(
     override fun handleClientConnection(socket: Socket) {
         val clientId = "${socket.remoteSocketAddress}_${System.currentTimeMillis()}"
 
-        // Track unique client IP for counting
-        val clientIp = socket.remoteSocketAddress.toString().substringBefore(':')
+        // Track unique client IP for counting - ENHANCED LOGGING
+        val clientIp = socket.remoteSocketAddress.toString().substringAfter("/").substringBefore(':')
+        val isNewClient = !connectedClients.containsKey(clientIp)
         connectedClients[clientIp] = System.currentTimeMillis()
-        Log.d(TAG, "Tracking client IP: $clientIp (Total unique clients: ${connectedClients.size})")
+        
+        if (isNewClient) {
+            Log.i(TAG, "NEW CLIENT connected via proxy: $clientIp (Total unique clients: ${connectedClients.size})")
+            
+            // Try to get device name for new clients
+            serviceScope.launch {
+                val deviceName = tryGetDeviceName(clientIp)
+                if (deviceName != null && deviceName != clientIp) {
+                    Log.i(TAG, "Device name for new client $clientIp: $deviceName")
+                }
+            }
+        } else {
+            Log.d(TAG, "Existing client reconnected: $clientIp (Total unique clients: ${connectedClients.size})")
+        }
 
         // Create appropriate handler based on proxy type
         val handler =
@@ -464,6 +488,94 @@ class ProxyServerImpl(
                     delay(60_000) // Wait longer on error
                 }
             }
+        }
+    }
+
+    /** ENHANCEMENT: Proactive client detection through subnet scanning */
+    private suspend fun startClientScanning() {
+        coroutineScope {
+            while (isActive) {
+                try {
+                    Log.i(TAG, "Running client scan...")
+                    scanForConnectedDevices()
+                    delay(15_000) // Scan every 15 seconds
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error in client scanning", e)
+                    delay(30_000) // Wait longer on error
+                }
+            }
+        }
+    }
+
+    /** Scan hotspot subnet for connected devices */
+    private suspend fun scanForConnectedDevices() {
+        val hotspotIp = hotspotManager.getHotspotIpAddress()
+        if (hotspotIp == null) {
+            Log.d(TAG, "No hotspot IP available for scanning")
+            return
+        }
+
+        val subnet = hotspotIp.substringBeforeLast(".")
+        Log.i(TAG, "Scanning subnet: $subnet.x for connected devices")
+
+        // Scan common device IPs (usually .2 to .10 for most hotspots)
+        val scanJobs = (2..10).map { i ->
+            clientDetectionScope.async {
+                val targetIp = "$subnet.$i"
+                Log.d(TAG, "Pinging $targetIp...")
+                if (pingDevice(targetIp)) {
+                    Log.i(TAG, "Ping successful for $targetIp!")
+                    // Device found - add to connected clients if not already tracked
+                    if (!connectedClients.containsKey(targetIp)) {
+                        connectedClients[targetIp] = System.currentTimeMillis()
+                        Log.i(TAG, "Discovered new device via ping: $targetIp (Total clients: ${connectedClients.size})")
+                        
+                        // Try to get device name for better identification
+                        clientDetectionScope.launch {
+                            val deviceName = tryGetDeviceName(targetIp)
+                            if (deviceName != null && deviceName != targetIp) {
+                                Log.i(TAG, "Device name for $targetIp: $deviceName")
+                            }
+                        }
+                    } else {
+                        // Update last seen time for existing device
+                        connectedClients[targetIp] = System.currentTimeMillis()
+                        Log.d(TAG, "Updated last seen for device: $targetIp")
+                    }
+                } else {
+                    Log.d(TAG, "No response from $targetIp")
+                }
+            }
+        }
+
+        // Wait for all ping operations (max 3 seconds)
+        withTimeoutOrNull(3000) {
+            scanJobs.awaitAll()
+        }
+        
+        // Log final scan results
+        Log.i(TAG, "Scan completed. Total connected clients: ${connectedClients.size}")
+        if (connectedClients.isNotEmpty()) {
+            Log.i(TAG, "Connected client IPs: ${connectedClients.keys.joinToString(", ")}")
+        }
+    }
+
+    /** Fast ping check for device availability */
+    private suspend fun pingDevice(ip: String): Boolean = withTimeoutOrNull(800) {
+        try {
+            val address = InetAddress.getByName(ip)
+            address.isReachable(500) // 500ms timeout per ping
+        } catch (e: Exception) {
+            false
+        }
+    } ?: false
+
+    /** Try to get device name via reverse DNS lookup */
+    private suspend fun tryGetDeviceName(ip: String): String? = withTimeoutOrNull(1000) {
+        try {
+            InetAddress.getByName(ip).hostName.takeIf { it != ip }
+        } catch (e: Exception) {
+            null
         }
     }
 }
