@@ -237,6 +237,7 @@ class Socks5ProxyHandler(
                 try {
                     val targetSocket = Socket()
                     targetSocket.connect(InetSocketAddress(host, port), 10000)
+                    targetSocket.soTimeout = 30000 // 30 second read timeout
 
                     // Send success reply
                     sendConnectionReply(
@@ -289,19 +290,27 @@ class Socks5ProxyHandler(
                 // Start bidirectional tunneling
                 val tunnelJob1 =
                         scope.launch {
-                            tunnelData(
-                                    socket.getInputStream(),
-                                    targetSocket.getOutputStream(),
-                                    bytesUp
-                            )
+                            try {
+                                tunnelData(
+                                        socket.getInputStream(),
+                                        targetSocket.getOutputStream(),
+                                        bytesUp
+                                )
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Tunnel job 1 failed: ${e.message}")
+                            }
                         }
                 val tunnelJob2 =
                         scope.launch {
-                            tunnelData(
-                                    targetSocket.getInputStream(),
-                                    socket.getOutputStream(),
-                                    bytesDown
-                            )
+                            try {
+                                tunnelData(
+                                        targetSocket.getInputStream(),
+                                        socket.getOutputStream(),
+                                        bytesDown
+                                )
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Tunnel job 2 failed: ${e.message}")
+                            }
                         }
 
                 // Wait for either tunnel to complete
@@ -318,13 +327,33 @@ class Socks5ProxyHandler(
             withContext(Dispatchers.IO) {
                 val buffer = ByteArray(BUFFER_SIZE)
                 var bytesRead: Int
-                while (input.read(buffer).also { bytesRead = it } != -1) {
-                    // TODO: HANCHEN - Replace this direct forwarding with VPN tunnel forwarding
-                    // Currently: Direct forwarding to target
-                    // Should be: Forward through VPN tunnel for encryption
-                    forwardThroughVpn(buffer, bytesRead, output)
-                    output.flush()
-                    bytesCounter.addAndGet(bytesRead.toLong())
+                
+                try {
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        try {
+                            // TODO: HANCHEN - Replace this direct forwarding with VPN tunnel forwarding
+                            // Currently: Direct forwarding to target
+                            // Should be: Forward through VPN tunnel for encryption
+                            forwardThroughVpn(buffer, bytesRead, output)
+                            output.flush()
+                            bytesCounter.addAndGet(bytesRead.toLong())
+                        } catch (e: IOException) {
+                            Log.w(TAG, "Error forwarding data: ${e.message}")
+                            break // Exit the loop on I/O errors
+                        }
+                    }
+                } catch (e: SocketException) {
+                    Log.i(TAG, "Connection reset by client: ${e.message}")
+                    // This is normal - client disconnected
+                } catch (e: Exception) {
+                    Log.e(TAG, "Unexpected error in tunnelData: ${e.message}", e)
+                } finally {
+                    try {
+                        input.close()
+                        output.close()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error closing streams: ${e.message}")
+                    }
                 }
             }
 

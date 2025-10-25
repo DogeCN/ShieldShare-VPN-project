@@ -116,24 +116,33 @@ class HttpProxyHandler(
                 val targetSocket = Socket()
                 try {
                     targetSocket.connect(InetSocketAddress(host, port), 10000)
+                    targetSocket.soTimeout = 30000 // 30 second read timeout
                     Log.d(TAG, "Connected to target: $host:$port")
 
                     // Start bidirectional tunneling
                     val tunnelJob1 =
                             scope.launch {
-                                tunnelData(
-                                        socket.getInputStream(),
-                                        targetSocket.getOutputStream(),
-                                        bytesUp
-                                )
+                                try {
+                                    tunnelData(
+                                            socket.getInputStream(),
+                                            targetSocket.getOutputStream(),
+                                            bytesUp
+                                    )
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Tunnel job 1 failed: ${e.message}")
+                                }
                             }
                     val tunnelJob2 =
                             scope.launch {
-                                tunnelData(
-                                        targetSocket.getInputStream(),
-                                        socket.getOutputStream(),
-                                        bytesDown
-                                )
+                                try {
+                                    tunnelData(
+                                            targetSocket.getInputStream(),
+                                            socket.getOutputStream(),
+                                            bytesDown
+                                    )
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Tunnel job 2 failed: ${e.message}")
+                                }
                             }
 
                     // Wait for either tunnel to complete
@@ -179,6 +188,7 @@ class HttpProxyHandler(
                 val targetSocket = Socket()
                 try {
                     targetSocket.connect(InetSocketAddress(host, port), 10000)
+                    targetSocket.soTimeout = 30000 // 30 second read timeout
                     val targetWriter = PrintWriter(targetSocket.getOutputStream(), true)
                     val targetReader =
                             BufferedReader(InputStreamReader(targetSocket.getInputStream()))
@@ -211,26 +221,46 @@ class HttpProxyHandler(
             withContext(Dispatchers.IO) {
                 val buffer = ByteArray(BUFFER_SIZE)
                 var bytesRead: Int
-                while (input.read(buffer).also { bytesRead = it } != -1) {
-                    // TODO: HANCHEN - Replace this direct forwarding with VPN tunnel forwarding
-                    // Currently: Direct forwarding to target
-                    // Should be: Forward through VPN tunnel for encryption
-                    forwardThroughVpn(buffer, bytesRead, output)
-                    output.flush()
-                    
-                    // STAGE 2: Track bytes and record traffic
-                    val bytes = bytesRead.toLong()
-                    bytesCounter.addAndGet(bytes)
-                    
-                    // Determine if this is upload or download
-                    val isUpload = bytesCounter == bytesUp
-                    
-                    if (isUpload) {
-                        trafficMeter.recordTraffic(clientIp, bytes, 0)
-                        Log.d(TAG, "↑ Upload: $bytes bytes from $clientIp")
-                    } else {
-                        trafficMeter.recordTraffic(clientIp, 0, bytes)
-                        Log.d(TAG, "↓ Download: $bytes bytes to $clientIp")
+                
+                try {
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        try {
+                            // TODO: HANCHEN - Replace this direct forwarding with VPN tunnel forwarding
+                            // Currently: Direct forwarding to target
+                            // Should be: Forward through VPN tunnel for encryption
+                            forwardThroughVpn(buffer, bytesRead, output)
+                            output.flush()
+                            
+                            // STAGE 2: Track bytes and record traffic
+                            val bytes = bytesRead.toLong()
+                            bytesCounter.addAndGet(bytes)
+                            
+                            // Determine if this is upload or download
+                            val isUpload = bytesCounter == bytesUp
+                            
+                            if (isUpload) {
+                                trafficMeter.recordTraffic(clientIp, bytes, 0)
+                                Log.d(TAG, "↑ Upload: $bytes bytes from $clientIp")
+                            } else {
+                                trafficMeter.recordTraffic(clientIp, 0, bytes)
+                                Log.d(TAG, "↓ Download: $bytes bytes to $clientIp")
+                            }
+                        } catch (e: IOException) {
+                            Log.w(TAG, "Error forwarding data: ${e.message}")
+                            break // Exit the loop on I/O errors
+                        }
+                    }
+                } catch (e: SocketException) {
+                    Log.i(TAG, "Connection reset by client: ${e.message}")
+                    // This is normal - client disconnected
+                } catch (e: Exception) {
+                    Log.e(TAG, "Unexpected error in tunnelData: ${e.message}", e)
+                } finally {
+                    try {
+                        input.close()
+                        output.close()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error closing streams: ${e.message}")
                     }
                 }
             }

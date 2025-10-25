@@ -292,7 +292,7 @@ fun StatusCard(
         latency: String
 ) {
         Card(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().height(120.dp),
                 colors =
                         CardDefaults.cardColors(
                                 containerColor = MaterialTheme.colorScheme.onTertiary
