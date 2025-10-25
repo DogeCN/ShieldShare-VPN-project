@@ -76,7 +76,7 @@ constructor(
                 } else {
                     // when disconnect, fresh the IP address
                     ipAutoJob?.cancel()
-                    _uiState.update { it.copy(ipAddress = null) }
+                    _uiState.update { it.copy(localIpAddress = null, publicIpAddress = null) }
                 }
             }
         }
@@ -265,10 +265,23 @@ constructor(
                 if (_uiState.value.isFetchingIp) return@launch
                 _uiState.update { it.copy(isFetchingIp = true) }
 
-                // Get hotspot IP instead of public IP
-                val hotspotIp = hotspotManager.getHotspotIpAddress()
+                // Get local IP
+                val localIp = hotspotManager.getHotspotIpAddress()
+                
+                // Get public IP
+                val publicIpResult = ipProvider.getPublicIp()
+                val publicIp = if (publicIpResult.isSuccess) {
+                    publicIpResult.getOrNull()
+                } else {
+                    null
+                }
+                
                 _uiState.update {
-                    it.copy(isFetchingIp = false, ipAddress = hotspotIp ?: "Not available")
+                    it.copy(
+                        isFetchingIp = false, 
+                        localIpAddress = localIp ?: "Not available",
+                        publicIpAddress = publicIp ?: "Not available"
+                    )
                 }
             }
 
@@ -328,6 +341,7 @@ data class HomeUiState(
         val latency: String = "0ms",
         val isHotspotEnabled: Boolean = false,
         val hotspotClients: Int = 0,
-        val ipAddress: String? = null,
+        val localIpAddress: String? = null,
+        val publicIpAddress: String? = null,
         val isFetchingIp: Boolean = false
 )
