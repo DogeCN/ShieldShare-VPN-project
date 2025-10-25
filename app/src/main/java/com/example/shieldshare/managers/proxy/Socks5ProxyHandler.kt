@@ -327,16 +327,31 @@ class Socks5ProxyHandler(
             withContext(Dispatchers.IO) {
                 val buffer = ByteArray(BUFFER_SIZE)
                 var bytesRead: Int
-                
+
                 try {
-                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                    while (true) {
                         try {
-                            // TODO: HANCHEN - Replace this direct forwarding with VPN tunnel forwarding
+                            bytesRead = input.read(buffer)
+                            if (bytesRead == -1) break
+
+                            // TODO: HANCHEN - Replace this direct forwarding with VPN tunnel
+                            // forwarding
                             // Currently: Direct forwarding to target
                             // Should be: Forward through VPN tunnel for encryption
-                            forwardThroughVpn(buffer, bytesRead, output)
-                            output.flush()
+                            try {
+                                forwardThroughVpn(buffer, bytesRead, output)
+                                output.flush()
+                            } catch (e: SocketException) {
+                                Log.w(TAG, "Connection reset during VPN forward: ${e.message}")
+                                break
+                            } catch (e: IOException) {
+                                Log.w(TAG, "IO error during VPN forward: ${e.message}")
+                                break
+                            }
                             bytesCounter.addAndGet(bytesRead.toLong())
+                        } catch (e: SocketException) {
+                            Log.w(TAG, "Connection reset during data tunneling: ${e.message}")
+                            break // Exit the loop on connection reset
                         } catch (e: IOException) {
                             Log.w(TAG, "Error forwarding data: ${e.message}")
                             break // Exit the loop on I/O errors
@@ -381,10 +396,17 @@ class Socks5ProxyHandler(
         //    - Forward directly (current behavior)
         //    - Queue for later when VPN connects
         //
-        // For now, we're forwarding directly
-        output.write(data, 0, length)
-
-        Log.d(TAG, "HANCHEN: Data forwarded directly (VPN integration pending)")
+        // For now, we're forwarding directly with proper exception handling
+        try {
+            output.write(data, 0, length)
+            Log.d(TAG, "HANCHEN: Data forwarded directly (VPN integration pending)")
+        } catch (e: SocketException) {
+            Log.w(TAG, "Socket closed during VPN forward: ${e.message}")
+            throw e // Re-throw to let caller handle connection cleanup
+        } catch (e: IOException) {
+            Log.w(TAG, "IO error during VPN forward: ${e.message}")
+            throw e // Re-throw to let caller handle connection cleanup
+        }
     }
 
     private fun cleanup() {

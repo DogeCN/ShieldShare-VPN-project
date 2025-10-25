@@ -9,9 +9,9 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.*
 
 /**
- * HTTP/HTTPS Proxy Handler with STAGE 2 Traffic Metering
- * Handles HTTP CONNECT requests for HTTPS tunneling and regular HTTP requests
- * Collects detailed traffic data for Jialu's per-device monitoring
+ * HTTP/HTTPS Proxy Handler with STAGE 2 Traffic Metering Handles HTTP CONNECT requests for HTTPS
+ * tunneling and regular HTTP requests Collects detailed traffic data for Jialu's per-device
+ * monitoring
  */
 class HttpProxyHandler(
         clientSocket: Socket,
@@ -28,9 +28,10 @@ class HttpProxyHandler(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val bytesUp = AtomicLong(0)
     private val bytesDown = AtomicLong(0)
-    
+
     // STAGE 2: Enhanced traffic tracking
-    private val clientIp = clientSocket.remoteSocketAddress.toString().substringAfter("/").substringBefore(":")
+    private val clientIp =
+            clientSocket.remoteSocketAddress.toString().substringAfter("/").substringBefore(":")
     private var sessionId: String? = null
     private var userAgent: String? = null
     private val hostsAccessed = mutableSetOf<String>()
@@ -39,13 +40,14 @@ class HttpProxyHandler(
         scope.launch {
             try {
                 // STAGE 2: Start traffic session
-                sessionId = (trafficMeter as? TrafficMeterSimple)?.startSession(
-                    clientIp = clientIp,
-                    protocolType = "HTTP"
-                )
-                
+                sessionId =
+                        (trafficMeter as? TrafficMeterSimple)?.startSession(
+                                clientIp = clientIp,
+                                protocolType = "HTTP"
+                        )
+
                 Log.i(TAG, "HTTP session started for client: $clientIp (Session: $sessionId)")
-                
+
                 handleConnection()
             } catch (e: Exception) {
                 Log.e(TAG, "Error handling proxy request", e)
@@ -56,30 +58,57 @@ class HttpProxyHandler(
     }
 
     override fun handleConnectionInternal() {
-        scope.launch { handleRequest() }
+        scope.launch {
+            try {
+                // Validate connection before processing
+                if (socket.isClosed || !socket.isConnected) {
+                    Log.w(TAG, "Invalid socket connection, skipping request")
+                    return@launch
+                }
+                handleRequest()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in connection handling", e)
+            }
+        }
     }
 
     private suspend fun handleRequest() =
             withContext(Dispatchers.IO) {
-                val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
-                val writer = PrintWriter(socket.getOutputStream(), true)
+                try {
+                    val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
+                    val writer = PrintWriter(socket.getOutputStream(), true)
 
-                // Read the first line to determine request type
-                val requestLine = reader.readLine() ?: return@withContext
-                Log.d(TAG, "Proxy request: $requestLine")
+                    // Read the first line to determine request type
+                    val requestLine =
+                            try {
+                                reader.readLine()
+                            } catch (e: SocketException) {
+                                Log.w(TAG, "Connection reset during request line read: ${e.message}")
+                                return@withContext
+                            } catch (e: IOException) {
+                                Log.w(TAG, "Connection reset while reading request: ${e.message}")
+                                return@withContext
+                            } catch (e: IOException) {
+                                Log.w(TAG, "IO error while reading request: ${e.message}")
+                                return@withContext
+                            } ?: return@withContext
+                    Log.d(TAG, "Proxy request: $requestLine")
 
-                val parts = requestLine.split(" ")
-                if (parts.size < 3) {
-                    sendErrorResponse(writer, 400, "Bad Request")
-                    return@withContext
-                }
+                    val parts = requestLine.split(" ")
+                    if (parts.size < 3) {
+                        sendErrorResponse(writer, 400, "Bad Request")
+                        return@withContext
+                    }
 
-                val method = parts[0]
-                val url = parts[1]
+                    val method = parts[0]
+                    val url = parts[1]
 
-                when (method) {
-                    CONNECT_METHOD -> handleConnectRequest(reader, writer, url)
-                    else -> handleHttpRequest(reader, writer, method, url)
+                    when (method) {
+                        CONNECT_METHOD -> handleConnectRequest(reader, writer, url)
+                        else -> handleHttpRequest(reader, writer, method, url)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error handling proxy request", e)
                 }
             }
 
@@ -97,7 +126,7 @@ class HttpProxyHandler(
                     sendErrorResponse(writer, 400, "Bad Request - Invalid host:port")
                     return@withContext
                 }
-                
+
                 // STAGE 2: Track target host
                 hostsAccessed.add(host)
                 sessionId?.let { sessionId ->
@@ -110,7 +139,15 @@ class HttpProxyHandler(
                 writer.println("$HTTP_VERSION 200 Connection Established")
                 writer.println("Proxy-Agent: ShieldShare/1.0")
                 writer.println()
-                writer.flush()
+                try {
+                    writer.flush()
+                } catch (e: SocketException) {
+                    Log.w(TAG, "Connection reset during flush: ${e.message}")
+                    return@withContext
+                } catch (e: IOException) {
+                    Log.w(TAG, "IO error during flush: ${e.message}")
+                    return@withContext
+                }
 
                 // Create tunnel to target server
                 val targetSocket = Socket()
@@ -176,7 +213,7 @@ class HttpProxyHandler(
                 var line: String?
                 while (reader.readLine().also { line = it } != null && line!!.isNotEmpty()) {
                     headers.add(line!!)
-                    
+
                     // STAGE 2: Extract User-Agent for device identification
                     if (line!!.lowercase().startsWith("user-agent:")) {
                         userAgent = line!!.substringAfter(":").trim()
@@ -197,7 +234,15 @@ class HttpProxyHandler(
                     targetWriter.println("$method $path $HTTP_VERSION")
                     headers.forEach { header -> targetWriter.println(header) }
                     targetWriter.println()
-                    targetWriter.flush()
+                    try {
+                        targetWriter.flush()
+                    } catch (e: SocketException) {
+                        Log.w(TAG, "Connection reset during target flush: ${e.message}")
+                        return@withContext
+                    } catch (e: IOException) {
+                        Log.w(TAG, "IO error during target flush: ${e.message}")
+                        return@withContext
+                    }
 
                     // Forward response back to client
                     var responseLine: String?
@@ -221,23 +266,35 @@ class HttpProxyHandler(
             withContext(Dispatchers.IO) {
                 val buffer = ByteArray(BUFFER_SIZE)
                 var bytesRead: Int
-                
+
                 try {
-                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                    while (true) {
                         try {
-                            // TODO: HANCHEN - Replace this direct forwarding with VPN tunnel forwarding
+                            bytesRead = input.read(buffer)
+                            if (bytesRead == -1) break
+
+                            // TODO: HANCHEN - Replace this direct forwarding with VPN tunnel
+                            // forwarding
                             // Currently: Direct forwarding to target
                             // Should be: Forward through VPN tunnel for encryption
-                            forwardThroughVpn(buffer, bytesRead, output)
-                            output.flush()
-                            
+                            try {
+                                forwardThroughVpn(buffer, bytesRead, output)
+                                output.flush()
+                            } catch (e: SocketException) {
+                                Log.w(TAG, "Connection reset during VPN forward: ${e.message}")
+                                break
+                            } catch (e: IOException) {
+                                Log.w(TAG, "IO error during VPN forward: ${e.message}")
+                                break
+                            }
+
                             // STAGE 2: Track bytes and record traffic
                             val bytes = bytesRead.toLong()
                             bytesCounter.addAndGet(bytes)
-                            
+
                             // Determine if this is upload or download
                             val isUpload = bytesCounter == bytesUp
-                            
+
                             if (isUpload) {
                                 trafficMeter.recordTraffic(clientIp, bytes, 0)
                                 Log.d(TAG, "↑ Upload: $bytes bytes from $clientIp")
@@ -245,6 +302,9 @@ class HttpProxyHandler(
                                 trafficMeter.recordTraffic(clientIp, 0, bytes)
                                 Log.d(TAG, "↓ Download: $bytes bytes to $clientIp")
                             }
+                        } catch (e: SocketException) {
+                            Log.w(TAG, "Connection reset during data tunneling: ${e.message}")
+                            break // Exit the loop on connection reset
                         } catch (e: IOException) {
                             Log.w(TAG, "Error forwarding data: ${e.message}")
                             break // Exit the loop on I/O errors
@@ -289,10 +349,17 @@ class HttpProxyHandler(
         //    - Forward directly (current behavior)
         //    - Queue for later when VPN connects
         //
-        // For now, we're forwarding directly
-        output.write(data, 0, length)
-
-        Log.d(TAG, "HANCHEN: Data forwarded directly (VPN integration pending)")
+        // For now, we're forwarding directly with proper exception handling
+        try {
+            output.write(data, 0, length)
+            Log.d(TAG, "HANCHEN: Data forwarded directly (VPN integration pending)")
+        } catch (e: SocketException) {
+            Log.w(TAG, "Socket closed during VPN forward: ${e.message}")
+            throw e // Re-throw to let caller handle connection cleanup
+        } catch (e: IOException) {
+            Log.w(TAG, "IO error during VPN forward: ${e.message}")
+            throw e // Re-throw to let caller handle connection cleanup
+        }
     }
 
     private fun parseHostPort(url: String): Pair<String?, Int> {
@@ -337,20 +404,22 @@ class HttpProxyHandler(
         }
 
         // STAGE 2: End traffic session and log summary
-        sessionId?.let { sessionId ->
-            (trafficMeter as? TrafficMeterSimple)?.endSession(sessionId)
-        }
-        
+        sessionId?.let { sessionId -> (trafficMeter as? TrafficMeterSimple)?.endSession(sessionId) }
+
         val totalUp = bytesUp.get()
         val totalDown = bytesDown.get()
-        
+
         // Get MAC address for enhanced logging
-        val macAddress = (trafficMeter as? TrafficMeterSimple)?.mapIpToMac()?.get(clientIp) ?: "unknown"
-        
+        val macAddress =
+                (trafficMeter as? TrafficMeterSimple)?.mapIpToMac()?.get(clientIp) ?: "unknown"
+
         Log.i(TAG, "**HTTP session ended** for $clientIp ($macAddress)")
         Log.i(TAG, "   ↑ **Total Upload**: ${formatBytes(totalUp)}")
         Log.i(TAG, "   ↓ **Total Download**: ${formatBytes(totalDown)}")
-        Log.i(TAG, "   **Hosts Accessed**: ${hostsAccessed.size} - ${hostsAccessed.joinToString(", ")}")
+        Log.i(
+                TAG,
+                "   **Hosts Accessed**: ${hostsAccessed.size} - ${hostsAccessed.joinToString(", ")}"
+        )
         Log.i(TAG, "   **User Agent**: ${userAgent ?: "Unknown"}")
 
         // Report traffic statistics
@@ -358,7 +427,7 @@ class HttpProxyHandler(
 
         scope.cancel()
     }
-    
+
     private fun formatBytes(bytes: Long): String {
         return when {
             bytes < 1024 -> "$bytes B"
