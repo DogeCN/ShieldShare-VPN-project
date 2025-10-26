@@ -550,36 +550,36 @@ class ProxyServerImpl(
         val subnet = hotspotIp.substringBeforeLast(".")
         Log.i(TAG, "Scanning subnet: $subnet.x for connected devices")
 
-        // Scan common device IPs (usually .2 to .10 for most hotspots)
+        // sacn client address
         val scanJobs = (2..10).map { i ->
             clientDetectionScope.async {
                 val targetIp = "$subnet.$i"
                 Log.d(TAG, "Pinging $targetIp...")
                 if (pingDevice(targetIp)) {
                     Log.i(TAG, "Ping successful for $targetIp!")
-                    // Device found - add to connected clients if not already tracked
+                    // record new devices
                     if (!connectedClients.containsKey(targetIp)) {
                         connectedClients[targetIp] = System.currentTimeMillis()
                         Log.i(TAG, "Discovered new device via ping: $targetIp (Total clients: ${connectedClients.size})")
-
-                        // Try to get device name for better identification
-                        clientDetectionScope.launch {
-                            val deviceName = tryGetDeviceName(targetIp)
-                            if (deviceName != null && deviceName != targetIp) {
-                                Log.i(TAG, "Device name for $targetIp: $deviceName")
-                            }
-                        } else {
-                            Log.d(TAG, "No response from $targetIp")
+                    }
+                    //
+                    clientDetectionScope.launch {
+                        val deviceName = tryGetDeviceName(targetIp)
+                        if (deviceName != null && deviceName != targetIp) {
+                            Log.i(TAG, "Device name for $targetIp: $deviceName")
                         }
                     }
+                } else {
+                    Log.d(TAG, "No response from $targetIp")
                 }
+            }
+        }
 
-        // Wait for all ping operations (max 3 seconds)
+        // waiting ping
         withTimeoutOrNull(3000) {
             scanJobs.awaitAll()
         }
 
-        // Log final scan results
         Log.i(TAG, "Scan completed. Total connected clients: ${connectedClients.size}")
         if (connectedClients.isNotEmpty()) {
             Log.i(TAG, "Connected client IPs: ${connectedClients.keys.joinToString(", ")}")
