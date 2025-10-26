@@ -319,35 +319,72 @@ class Socks5ProxyHandler(
     ) = withContext(Dispatchers.IO) {
         val buffer = ByteArray(BUFFER_SIZE)
         var total = 0L
-        while (true) {
-            val n = input.read(buffer)
-            if (n <= 0) break
-            // Note: using VPN-bound target output stream, no extra "tunnel API" needed
-            forwardThroughVpn(buffer, n, output)
-            total += n
-        }
-        output.flush()
-
-        if (isUpload) {
-            bytesUp.addAndGet(total)
-            trafficMeter.recordTraffic(clientIp, total, 0)
-            Log.d(TAG, "↑ Upload: $total bytes from $clientIp")
-        } else {
-            bytesDown.addAndGet(total)
-            trafficMeter.recordTraffic(clientIp, 0, total)
-            Log.d(TAG, "↓ Download: $total bytes to $clientIp")
+        try {
+            while (true) {
+                try {
+                    val n = input.read(buffer)
+                    if (n <= 0) break
+                    
+                    try {
+                        // Note: using VPN-bound target output stream, no extra "tunnel API" needed
+                        forwardThroughVpn(buffer, n, output)
+                        total += n
+                    } catch (e: SocketException) {
+                        Log.w(TAG, "Connection reset during VPN forward: ${e.message}")
+                        break
+                    } catch (e: IOException) {
+                        Log.w(TAG, "IO error during VPN forward: ${e.message}")
+                        break
+                    }
+                } catch (e: SocketException) {
+                    Log.w(TAG, "Connection reset during data tunneling: ${e.message}")
+                    break // Exit the loop on connection reset
+                } catch (e: IOException) {
+                    Log.w(TAG, "Error reading data: ${e.message}")
+                    break // Exit the loop on I/O errors
+                }
+            }
+            
+            try {
+                output.flush()
+            } catch (e: SocketException) {
+                Log.w(TAG, "Connection reset during flush: ${e.message}")
+            } catch (e: IOException) {
+                Log.w(TAG, "IO error during flush: ${e.message}")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Unexpected error in tunnelData: ${e.message}", e)
+        } finally {
+            // Record traffic statistics
+            if (isUpload) {
+                bytesUp.addAndGet(total)
+                trafficMeter.recordTraffic(clientIp, total, 0)
+                Log.d(TAG, "↑ Upload: $total bytes from $clientIp")
+            } else {
+                bytesDown.addAndGet(total)
+                trafficMeter.recordTraffic(clientIp, 0, total)
+                Log.d(TAG, "↓ Download: $total bytes to $clientIp")
+            }
         }
     }
 
     /**
      * Note: Under the current approach of using the system-level third-party VPN,
-     * there is no need to “write into a VPN tunnel” here.
+     * there is no need to "write into a VPN tunnel" here.
      * All outbound sockets are already bound to the VPN via activeNetwork.socketFactory.
      * This method is only for logging and policy control.
      */
     private suspend fun forwardThroughVpn(data: ByteArray, length: Int, output: OutputStream) {
         withContext(Dispatchers.IO) {
-            output.write(data, 0, length) // output belongs to a VPN-bound target socket
+            try {
+                output.write(data, 0, length) // output belongs to a VPN-bound target socket
+            } catch (e: SocketException) {
+                Log.w(TAG, "Socket closed during VPN forward: ${e.message}")
+                throw e // Re-throw to let caller handle connection cleanup
+            } catch (e: IOException) {
+                Log.w(TAG, "IO error during VPN forward: ${e.message}")
+                throw e // Re-throw to let caller handle connection cleanup
+            }
         }
     }
 
