@@ -47,6 +47,14 @@ class ProxyServerImpl(
                         return@withContext Result.failure(Exception("Proxy server already running"))
                     }
 
+                    // Validate port configuration to prevent crashes
+                    if (!ProxyPortManager.validatePortConfiguration(config)) {
+                        Log.w(
+                                TAG,
+                                "Port configuration may cause conflicts. Consider using recommended ports."
+                        )
+                    }
+
                     // Try binding to the specific hotspot interface
                     val hotspotIp = hotspotManager.getHotspotIpAddress()
                     val bindAddress =
@@ -58,6 +66,7 @@ class ProxyServerImpl(
                     serverSocket =
                             ServerSocket().apply {
                                 reuseAddress = true
+                                soTimeout = 30000 // 30 second timeout
                                 bind(bindAddress)
                             }
                     val instance =
@@ -82,9 +91,9 @@ class ProxyServerImpl(
                     serviceScope.launch { startClientCleanup() }
 
                     // ENHANCEMENT: Start proactive client detection
-                    serviceScope.launch { 
+                    serviceScope.launch {
                         Log.i(TAG, "Starting proactive client detection")
-                        startClientScanning() 
+                        startClientScanning()
                     }
 
                     Result.success(instance)
@@ -150,8 +159,20 @@ class ProxyServerImpl(
     override fun handleClientConnection(socket: Socket) {
         val clientId = "${socket.remoteSocketAddress}_${System.currentTimeMillis()}"
 
+        // Validate socket connection to prevent crashes
+        if (socket.isClosed || !socket.isConnected) {
+            Log.w(TAG, "Invalid socket connection, closing")
+            try {
+                socket.close()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error closing invalid socket", e)
+            }
+            return
+        }
+
         // Track unique client IP for counting - ENHANCED LOGGING
-        val clientIp = socket.remoteSocketAddress.toString().substringAfter("/").substringBefore(':')
+        val clientIp =
+                socket.remoteSocketAddress.toString().substringAfter("/").substringBefore(':')
         val isNewClient = !connectedClients.containsKey(clientIp)
         connectedClients[clientIp] = System.currentTimeMillis()
 
@@ -165,7 +186,10 @@ class ProxyServerImpl(
                 }
             }
         } else {
-            Log.d(TAG, "Existing client reconnected: $clientIp (Total unique clients: ${connectedClients.size})")
+            Log.d(
+                    TAG,
+                    "Existing client reconnected: $clientIp (Total unique clients: ${connectedClients.size})"
+            )
         }
 
         // Strict mode: ensure all outbound sockets go via VPN; if not connected, reject early
@@ -544,17 +568,11 @@ class ProxyServerImpl(
                             if (deviceName != null && deviceName != targetIp) {
                                 Log.i(TAG, "Device name for $targetIp: $deviceName")
                             }
+                        } else {
+                            Log.d(TAG, "No response from $targetIp")
                         }
-                    } else {
-                        // Update last seen time for existing device
-                        connectedClients[targetIp] = System.currentTimeMillis()
-                        Log.d(TAG, "Updated last seen for device: $targetIp")
                     }
-                } else {
-                    Log.d(TAG, "No response from $targetIp")
                 }
-            }
-        }
 
         // Wait for all ping operations (max 3 seconds)
         withTimeoutOrNull(3000) {
@@ -569,14 +587,16 @@ class ProxyServerImpl(
     }
 
     /** Fast ping check for device availability */
-    private suspend fun pingDevice(ip: String): Boolean = withTimeoutOrNull(800) {
-        try {
-            val address = InetAddress.getByName(ip)
-            address.isReachable(500) // 500ms timeout per ping
-        } catch (e: Exception) {
-            false
-        }
-    } ?: false
+    private suspend fun pingDevice(ip: String): Boolean =
+            withTimeoutOrNull(800) {
+                try {
+                    val address = InetAddress.getByName(ip)
+                    address.isReachable(500) // 500ms timeout per ping
+                } catch (e: Exception) {
+                    false
+                }
+            }
+                    ?: false
 
     /** Try to get device name via reverse DNS lookup */
     private suspend fun tryGetDeviceName(ip: String): String? = withTimeoutOrNull(1000) {

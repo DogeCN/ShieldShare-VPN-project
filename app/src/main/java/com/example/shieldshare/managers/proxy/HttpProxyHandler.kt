@@ -34,9 +34,10 @@ class HttpProxyHandler(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val bytesUp = AtomicLong(0)
     private val bytesDown = AtomicLong(0)
-    
+
     // STAGE 2: Enhanced traffic tracking
-    private val clientIp = clientSocket.remoteSocketAddress.toString().substringAfter("/").substringBefore(":")
+    private val clientIp =
+            clientSocket.remoteSocketAddress.toString().substringAfter("/").substringBefore(":")
     private var sessionId: String? = null
     private var userAgent: String? = null
     private val hostsAccessed = mutableSetOf<String>()
@@ -62,7 +63,18 @@ class HttpProxyHandler(
 
     /** If your base class calls this, keep it delegating to the same request handler. */
     override fun handleConnectionInternal() {
-        scope.launch { handleRequest() }
+        scope.launch {
+            try {
+                // Validate connection before processing
+                if (socket.isClosed || !socket.isConnected) {
+                    Log.w(TAG, "Invalid socket connection, skipping request")
+                    return@launch
+                }
+                handleRequest()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in connection handling", e)
+            }
+        }
     }
 
     private suspend fun handleRequest() = withContext(Dispatchers.IO) {
@@ -303,7 +315,10 @@ class HttpProxyHandler(
         Log.i(TAG, "**HTTP session ended** for $clientIp ($macAddress)")
         Log.i(TAG, "   ↑ **Total Upload**: ${formatBytes(totalUp)}")
         Log.i(TAG, "   ↓ **Total Download**: ${formatBytes(totalDown)}")
-        Log.i(TAG, "   **Hosts Accessed**: ${hostsAccessed.size} - ${hostsAccessed.joinToString(", ")}")
+        Log.i(
+                TAG,
+                "   **Hosts Accessed**: ${hostsAccessed.size} - ${hostsAccessed.joinToString(", ")}"
+        )
         Log.i(TAG, "   **User Agent**: ${userAgent ?: "Unknown"}")
 
         trafficCallback(totalUp, totalDown)

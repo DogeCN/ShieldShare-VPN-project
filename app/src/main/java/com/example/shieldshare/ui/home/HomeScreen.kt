@@ -27,6 +27,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.material.icons.filled.Refresh
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.shieldshare.R
 import kotlinx.coroutines.launch
@@ -114,24 +115,7 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.fillMaxWidth()
                                 )
-
-                                // Timer interval for stats updates
-                                if (uiState.isVpnConnected) {
-                                        Text(
-                                                text = "00:00:00",
-                                                style = MaterialTheme.typography.headlineSmall,
-                                                fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.onBackground
-                                        )
-                                }
                         }
-
-                        // Shows IP Address
-                        IpAddressRow(
-                                ip = uiState.ipAddress,
-                                loading = uiState.isFetchingIp,
-                                onRefresh = { viewModel.refreshIp() }
-                        )
 
                         // Controls and stats
                         Column(
@@ -142,6 +126,14 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
+                                // IP Addresses Section
+                                IpAddressRow(
+                                        localIp = uiState.localIpAddress,
+                                        publicIp = uiState.publicIpAddress,
+                                        loading = uiState.isFetchingIp,
+                                        onRefresh = { viewModel.refreshIp() }
+                                )
+
                                 // Button
                                 ConnectButton(
                                         isConnected = uiState.isVpnConnected,
@@ -292,7 +284,7 @@ fun StatusCard(
         latency: String
 ) {
         Card(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().height(120.dp),
                 colors =
                         CardDefaults.cardColors(
                                 containerColor = MaterialTheme.colorScheme.onTertiary
@@ -509,23 +501,62 @@ fun ControlCard(
 }
 
 @Composable
-private fun IpAddressRow(ip: String?, loading: Boolean, onRefresh: () -> Unit) {
+private fun IpAddressRow(localIp: String?, publicIp: String?, loading: Boolean, onRefresh: () -> Unit) {
         Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 100.dp),
-                verticalAlignment = Alignment.CenterVertically
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
         ) {
-                Text(text = "IP Address", style = MaterialTheme.typography.bodyMedium)
-                Spacer(Modifier.width(12.dp))
-                if (loading) {
-                        CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp
-                        )
-                } else {
-                        Text(text = ip ?: "—", style = MaterialTheme.typography.bodyMedium)
+                // Left side - IP addresses
+                Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                        // Local IP Row
+                        Row(
+                                verticalAlignment = Alignment.CenterVertically
+                        ) {
+                                Text(text = "Local IP", style = MaterialTheme.typography.bodyMedium)
+                                Spacer(Modifier.width(12.dp))
+                                if (loading) {
+                                        CircularProgressIndicator(
+                                                modifier = Modifier.size(18.dp),
+                                                strokeWidth = 2.dp
+                                        )
+                                } else {
+                                        Text(text = localIp ?: "—", style = MaterialTheme.typography.bodyMedium)
+                                }
+                        }
+                        
+                        // Public IP Row
+                        Row(
+                                verticalAlignment = Alignment.CenterVertically
+                        ) {
+                                Text(text = "Public IP", style = MaterialTheme.typography.bodyMedium)
+                                Spacer(Modifier.width(12.dp))
+                                if (loading) {
+                                        CircularProgressIndicator(
+                                                modifier = Modifier.size(18.dp),
+                                                strokeWidth = 2.dp
+                                        )
+                                } else {
+                                        Text(text = publicIp ?: "—", style = MaterialTheme.typography.bodyMedium)
+                                }
+                        }
                 }
-                Spacer(Modifier.weight(1f))
-                TextButton(onClick = onRefresh, enabled = !loading) { Text("Refresh") }
+                
+                // Right side - Refresh icon
+                IconButton(
+                        onClick = onRefresh, 
+                        enabled = !loading,
+                        modifier = Modifier.size(32.dp)
+                ) {
+                        Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Refresh IP addresses",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                        )
+                }
         }
 }
 
@@ -555,7 +586,7 @@ fun QrCodeDialog(onDismiss: () -> Unit, viewModel: HomeViewModel, uiState: HomeU
 
                                 // QR Code Display
                                 val qrCode =
-                                        remember(uiState.ipAddress, uiState.proxyPort) {
+                                        remember(uiState.localIpAddress, uiState.proxyPort) {
                                                 viewModel.generateQRCode()
                                         }
 
