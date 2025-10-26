@@ -15,6 +15,11 @@ import java.io.*
 import java.net.*
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.*
+import com.example.shieldshare.managers.vpn.vpnAwareSocketFactory
+import javax.net.SocketFactory
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import java.net.URLDecoder
 
 class ProxyForegroundService : Service() {
     companion object {
@@ -89,117 +94,157 @@ class ProxyForegroundService : Service() {
         }
     }
 
-    private suspend fun startHttpProxyServer() =
-            withContext(Dispatchers.IO) {
-                try {
-                    httpServerSocket = ServerSocket(HTTP_PROXY_PORT)
-                    Log.i(TAG, "HTTP proxy server listening on port $HTTP_PROXY_PORT")
-
-                    while (isActive && !httpServerSocket!!.isClosed) {
-                        try {
-                            val clientSocket = httpServerSocket!!.accept()
-                            activeConnections.incrementAndGet()
-
-                            // Handle special requests
-                            if (isPacFileRequest(clientSocket)) {
-                                handlePacFileRequest(clientSocket)
-                            } else if (isConfigPageRequest(clientSocket)) {
-                                handleConfigPageRequest(clientSocket)
-                            } else {
-                                // Handle regular proxy requests
-                                val handler =
-                                        HttpProxyHandler(clientSocket, trafficMeter) {
-                                                bytesUp,
-                                                bytesDown ->
-                                            Log.d(
-                                                    TAG,
-                                                    "HTTP proxy traffic: up=$bytesUp, down=$bytesDown"
-                                            )
-                                            activeConnections.decrementAndGet()
-                                        }
-                                handler.start()
-                            }
-                        } catch (e: SocketException) {
-                            if (!httpServerSocket!!.isClosed) {
-                                Log.e(TAG, "Error accepting HTTP proxy connection", e)
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "HTTP proxy server error", e)
-                }
-            }
-
-    private suspend fun startSocks5ProxyServer() =
-            withContext(Dispatchers.IO) {
-                try {
-                    socks5ServerSocket = ServerSocket(SOCKS5_PROXY_PORT)
-                    Log.i(TAG, "SOCKS5 proxy server listening on port $SOCKS5_PROXY_PORT")
-
-                    while (isActive && !socks5ServerSocket!!.isClosed) {
-                        try {
-                            val clientSocket = socks5ServerSocket!!.accept()
-                            activeConnections.incrementAndGet()
-
-                            val handler =
-                                    Socks5ProxyHandler(clientSocket, trafficMeter) {
-                                            bytesUp,
-                                            bytesDown ->
-                                        Log.d(
-                                                TAG,
-                                                "SOCKS5 proxy traffic: up=$bytesUp, down=$bytesDown"
-                                        )
-                                        activeConnections.decrementAndGet()
-                                    }
-                            handler.start()
-                        } catch (e: SocketException) {
-                            if (!socks5ServerSocket!!.isClosed) {
-                                Log.e(TAG, "Error accepting SOCKS5 proxy connection", e)
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "SOCKS5 proxy server error", e)
-                }
-            }
-
-    private fun isPacFileRequest(socket: Socket): Boolean {
-        return try {
-            val input = socket.getInputStream()
-            val reader = BufferedReader(InputStreamReader(input))
-            val requestLine = reader.readLine()
-            requestLine?.contains("/proxy.pac") == true
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    private fun handlePacFileRequest(socket: Socket) {
+    private suspend fun startHttpProxyServer() = withContext(Dispatchers.IO) {
         try {
-            val output = socket.getOutputStream()
-            val writer = PrintWriter(output, true)
+            httpServerSocket = ServerSocket(HTTP_PROXY_PORT).apply { reuseAddress = true }
+            Log.i(TAG, "HTTP proxy server listening on port $HTTP_PROXY_PORT")
 
-            val pacContent = pacFileGenerator.generatePacFile()
+            while (isActive && !httpServerSocket!!.isClosed) {
+                val clientSocket = try {
+                    httpServerSocket!!.accept()
+                } catch (e: SocketException) {
+                    if (!httpServerSocket!!.isClosed) {
+                        Log.e(TAG, "HTTP accept failed", e)
+                    }
+                    break
+                } catch (e: Exception) {
+                    Log.e(TAG, "HTTP accept error", e)
+                    continue
+                }
 
-            writer.println("HTTP/1.1 200 OK")
-            writer.println("Content-Type: application/x-ns-proxy-autoconfig")
-            writer.println("Content-Length: ${pacContent.length}")
-            writer.println("Cache-Control: no-cache")
-            writer.println()
-            writer.println(pacContent)
-            writer.flush()
+                activeConnections.incrementAndGet()
 
-            Log.d(TAG, "Served PAC file to client")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error serving PAC file", e)
-        } finally {
-            try {
-                socket.close()
-            } catch (e: Exception) {
-                Log.e(TAG, "Error closing PAC file socket", e)
+                // 独立协程处理每个连接
+                serviceScope.launch(Dispatchers.IO) {
+                    try {
+                        clientSocket.tcpNoDelay = true
+
+                        val rawIn = BufferedInputStream(clientSocket.getInputStream())
+                        val pb = PushbackInputStream(rawIn, 8192)
+                        val (firstLine, firstBytes) = readFirstRequestLine(pb)
+
+                        val line = firstLine ?: ""
+                        val localAddr = clientSocket.localAddress?.hostAddress ?: "127.0.0.1"
+
+                        // 路由：/proxy.pac 或 /configure
+                        val isPac = Regex("""\s/+(?i:proxy\.pac)(?:\s|\?|$)""")
+                            .containsMatchIn(line)
+                        val isConfigure = Regex("""\s/+(?i:configure)(?:\s|\?|$)""")
+                            .containsMatchIn(line)
+
+                        if (isPac) {
+                            // 生成最简 PAC（HTTP 优先，其次 SOCKS5，再不行 DIRECT）
+                            val pac = """
+                            function FindProxyForURL(url, host) {
+                                return "PROXY $localAddr:$HTTP_PROXY_PORT; SOCKS5 $localAddr:$SOCKS5_PROXY_PORT; DIRECT";
+                            }
+                        """.trimIndent().toByteArray(Charsets.UTF_8)
+
+                            writeHttpResponse(
+                                socket = clientSocket,
+                                status = "200 OK",
+                                contentType = "application/x-ns-proxy-autoconfig; charset=utf-8",
+                                body = pac
+                            )
+                            return@launch
+                        }
+
+                        if (isConfigure) {
+                            val pacUrl = "http://$localAddr:$HTTP_PROXY_PORT/proxy.pac"
+                            val html = """
+                            <!doctype html>
+                            <html>
+                            <head><meta charset="utf-8"><title>ShieldShare Configure</title></head>
+                            <body>
+                              <h1>ShieldShare Proxy</h1>
+                              <p>Auto Proxy URL (PAC): <a href="$pacUrl">$pacUrl</a></p>
+                              <p>HTTP Proxy: $localAddr:$HTTP_PROXY_PORT</p>
+                              <p>SOCKS5 Proxy: $localAddr:$SOCKS5_PROXY_PORT</p>
+                            </body>
+                            </html>
+                        """.trimIndent().toByteArray(Charsets.UTF_8)
+
+                            writeHttpResponse(
+                                socket = clientSocket,
+                                status = "200 OK",
+                                contentType = "text/html; charset=utf-8",
+                                body = html
+                            )
+                            return@launch
+                        }
+
+                        // 普通 HTTP/HTTPS 代理流量：把已读请求行推回去交给真正的代理处理
+                        if (firstBytes.isNotEmpty()) {
+                            pb.unread(firstBytes)
+                        }
+
+                        val sf: SocketFactory = applicationContext.vpnAwareSocketFactory(strict = true)
+
+                        val handler: ProxyHandler =
+                            HttpProxyHandler(
+                                clientSocket = clientSocket,
+                                trafficMeter = trafficMeter,
+                                socketFactory = sf,
+                                inOverride = pb
+                            ) { bytesUp, bytesDown ->
+                                Log.d(TAG, "HTTP proxy traffic: up=$bytesUp, down=$bytesDown")
+                                activeConnections.decrementAndGet()
+                            }
+
+                        // 在当前协程中执行连接处理
+                        handler.handleConnection()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "HTTP connection error", e)
+                        runCatching { clientSocket.close() }
+                            .onFailure { ce -> Log.w(TAG, "HTTP client close failed", ce) }
+                        // 仅当未通过回调减少连接计数时，这里兜底减少
+                        activeConnections.decrementAndGet()
+                    }
+                }
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start HTTP proxy server", e)
         }
     }
+
+    private suspend fun startSocks5ProxyServer() = withContext(Dispatchers.IO) {
+        try {
+            socks5ServerSocket = ServerSocket(SOCKS5_PROXY_PORT)
+            Log.i(TAG, "SOCKS5 proxy server listening on port $SOCKS5_PROXY_PORT")
+
+            while (isActive && !socks5ServerSocket!!.isClosed) {
+                try {
+                    val clientSocket = socks5ServerSocket!!.accept()
+                    activeConnections.incrementAndGet()
+
+                    // 为 SOCKS5 分支补齐 socketFactory
+                    val sf: SocketFactory = applicationContext.vpnAwareSocketFactory(strict = true)
+
+                    val handler: ProxyHandler =
+                        Socks5ProxyHandler(
+                            clientSocket = clientSocket,
+                            trafficMeter = trafficMeter,
+                            socketFactory = sf
+                        ) { bytesUp, bytesDown ->
+                            Log.d(TAG, "SOCKS5 proxy traffic: up=$bytesUp, down=$bytesDown")
+                            activeConnections.decrementAndGet()
+                        }
+
+                    // 使用协程跑模板方法，而不是调用不存在的 start()
+                    serviceScope.launch { handler.handleConnection() }
+                } catch (e: SocketException) {
+                    if (!socks5ServerSocket!!.isClosed) {
+                        Log.e(TAG, "SOCKS5 accept failed", e)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "SOCKS5 handler error", e)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start SOCKS5 proxy server", e)
+        }
+    }
+
 
     private fun stopProxyServers() {
         try {
@@ -211,41 +256,58 @@ class ProxyForegroundService : Service() {
         }
     }
 
-    private fun isConfigPageRequest(socket: Socket): Boolean {
-        return try {
-            val input = socket.getInputStream()
-            val reader = BufferedReader(InputStreamReader(input))
-            val requestLine = reader.readLine()
-            requestLine?.contains("/configure") == true
-        } catch (e: Exception) {
-            false
+
+    private fun readFirstRequestLine(pb: PushbackInputStream): Pair<String?, ByteArray> {
+        val baos = ByteArrayOutputStream()
+        val sb = StringBuilder()
+        var prevCR = false
+
+        while (true) {
+            val b = pb.read()
+            if (b == -1) break
+            baos.write(b)
+
+            if (b == '\n'.code) break
+            if (prevCR && b != '\n'.code) break
+
+            if (b != '\r'.code && b != '\n'.code) {
+                sb.append(b.toChar())
+            }
+            prevCR = (b == '\r'.code)
+            // 简单保护：首行超长则提前停止
+            if (baos.size() >= 4096) break
         }
+
+        val line = sb.toString().ifBlank { null }
+        return line to baos.toByteArray()
     }
 
-    private fun handleConfigPageRequest(socket: Socket) {
+    private fun writeHttpResponse(
+        socket: Socket,
+        status: String,
+        contentType: String,
+        body: ByteArray
+    ) {
         try {
-            val output = socket.getOutputStream()
-            val writer = PrintWriter(output, true)
+            val out = BufferedOutputStream(socket.getOutputStream())
+            val header = buildString {
+                append("HTTP/1.1 ").append(status).append("\r\n")
+                append("Content-Type: ").append(contentType).append("\r\n")
+                append("Content-Length: ").append(body.size).append("\r\n")
+                append("Connection: close\r\n")
+                append("Cache-Control: no-cache, no-store, must-revalidate\r\n")
+                append("Pragma: no-cache\r\n")
+                append("Expires: 0\r\n")
+                append("\r\n")
+            }.toByteArray(Charsets.UTF_8)
 
-            val configPage = generateConfigPage()
-
-            writer.println("HTTP/1.1 200 OK")
-            writer.println("Content-Type: text/html; charset=UTF-8")
-            writer.println("Content-Length: ${configPage.length}")
-            writer.println("Cache-Control: no-cache")
-            writer.println()
-            writer.println(configPage)
-            writer.flush()
-
-            Log.d(TAG, "Served configuration page to client")
+            out.write(header)
+            out.write(body)
+            out.flush()
         } catch (e: Exception) {
-            Log.e(TAG, "Error serving configuration page", e)
+            Log.w(TAG, "writeHttpResponse failed", e)
         } finally {
-            try {
-                socket.close()
-            } catch (e: Exception) {
-                Log.e(TAG, "Error closing configuration page socket", e)
-            }
+            runCatching { socket.close() }
         }
     }
 
