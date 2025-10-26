@@ -7,15 +7,21 @@ import java.io.*
 import java.net.*
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.*
+import java.net.InetSocketAddress
+import java.net.Socket
+import javax.net.SocketFactory
 
 /**
  * HTTP/HTTPS Proxy Handler with STAGE 2 Traffic Metering
  * Handles HTTP CONNECT requests for HTTPS tunneling and regular HTTP requests
  * Collects detailed traffic data for Jialu's per-device monitoring
+ * Ensures all outbound sockets are created via a VPN-bound SocketFactory
  */
 class HttpProxyHandler(
         clientSocket: Socket,
         trafficMeter: TrafficMeter,
+        private val socketFactory: SocketFactory,
+        private val inOverride: InputStream? = null,
         private val trafficCallback: (bytesUp: Long, bytesDown: Long) -> Unit = { _, _ -> }
 ) : ProxyHandler(clientSocket, trafficMeter) {
     companion object {
@@ -35,6 +41,7 @@ class HttpProxyHandler(
     private var userAgent: String? = null
     private val hostsAccessed = mutableSetOf<String>()
 
+    /** Entry point from server */
     fun start() {
         scope.launch {
             try {
@@ -43,10 +50,8 @@ class HttpProxyHandler(
                     clientIp = clientIp,
                     protocolType = "HTTP"
                 )
-                
                 Log.i(TAG, "HTTP session started for client: $clientIp (Session: $sessionId)")
-                
-                handleConnection()
+                handleRequest()
             } catch (e: Exception) {
                 Log.e(TAG, "Error handling proxy request", e)
             } finally {
@@ -55,238 +60,217 @@ class HttpProxyHandler(
         }
     }
 
+    /** If your base class calls this, keep it delegating to the same request handler. */
     override fun handleConnectionInternal() {
         scope.launch { handleRequest() }
     }
 
-    private suspend fun handleRequest() =
-            withContext(Dispatchers.IO) {
-                val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
-                val writer = PrintWriter(socket.getOutputStream(), true)
+    private suspend fun handleRequest() = withContext(Dispatchers.IO) {
+        val clientIn = inOverride ?: socket.getInputStream()
+        val clientOut = socket.getOutputStream()
+        val reader = BufferedReader(InputStreamReader(clientIn, Charsets.US_ASCII))
+        val writer = PrintWriter(OutputStreamWriter(clientOut, Charsets.US_ASCII), true)
 
-                // Read the first line to determine request type
-                val requestLine = reader.readLine() ?: return@withContext
-                Log.d(TAG, "Proxy request: $requestLine")
+        // Read the first request line
+        val requestLine = reader.readLine() ?: return@withContext
+        Log.d(TAG, "Proxy request: $requestLine")
 
-                val parts = requestLine.split(" ")
-                if (parts.size < 3) {
-                    sendErrorResponse(writer, 400, "Bad Request")
-                    return@withContext
-                }
+        val parts = requestLine.split(" ")
+        if (parts.size < 3) {
+            sendErrorResponse(writer, 400, "Bad Request")
+            return@withContext
+        }
 
-                val method = parts[0]
-                val url = parts[1]
+        val method = parts[0]
+        val url = parts[1]
 
-                when (method) {
-                    CONNECT_METHOD -> handleConnectRequest(reader, writer, url)
-                    else -> handleHttpRequest(reader, writer, method, url)
-                }
-            }
-
-    private suspend fun handleConnectRequest(
-            reader: BufferedReader,
-            writer: PrintWriter,
-            url: String
-    ) =
-            withContext(Dispatchers.IO) {
-                Log.i(TAG, "HTTPS CONNECT request to: $url from $clientIp")
-
-                // Parse host and port from URL
-                val (host, port) = parseHostPort(url)
-                if (host == null || port == -1) {
-                    sendErrorResponse(writer, 400, "Bad Request - Invalid host:port")
-                    return@withContext
-                }
-                
-                // STAGE 2: Track target host
-                hostsAccessed.add(host)
-                sessionId?.let { sessionId ->
-                    // TODO: Add updateSessionTarget method to TrafficMeterSimple if needed
-                    // (trafficMeter as? TrafficMeterSimple)?.updateSessionTarget(sessionId, host)
-                }
-                Log.i(TAG, "Client $clientIp accessing: $host:$port")
-
-                // Send 200 Connection Established response
-                writer.println("$HTTP_VERSION 200 Connection Established")
-                writer.println("Proxy-Agent: ShieldShare/1.0")
-                writer.println()
-                writer.flush()
-
-                // Create tunnel to target server
-                val targetSocket = Socket()
-                try {
-                    targetSocket.connect(InetSocketAddress(host, port), 10000)
-                    Log.d(TAG, "Connected to target: $host:$port")
-
-                    // Start bidirectional tunneling
-                    val tunnelJob1 =
-                            scope.launch {
-                                tunnelData(
-                                        socket.getInputStream(),
-                                        targetSocket.getOutputStream(),
-                                        bytesUp
-                                )
-                            }
-                    val tunnelJob2 =
-                            scope.launch {
-                                tunnelData(
-                                        targetSocket.getInputStream(),
-                                        socket.getOutputStream(),
-                                        bytesDown
-                                )
-                            }
-
-                    // Wait for either tunnel to complete
-                    joinAll(tunnelJob1, tunnelJob2)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to connect to target: $host:$port", e)
-                    sendErrorResponse(writer, 502, "Bad Gateway")
-                } finally {
-                    targetSocket.close()
-                }
-            }
-
-    private suspend fun handleHttpRequest(
-            reader: BufferedReader,
-            writer: PrintWriter,
-            method: String,
-            url: String
-    ) =
-            withContext(Dispatchers.IO) {
-                Log.d(TAG, "Handling HTTP request: $method $url")
-
-                // Parse URL to get host and port
-                val (host, port, path) = parseHttpUrl(url)
-                if (host == null) {
-                    sendErrorResponse(writer, 400, "Bad Request - Invalid URL")
-                    return@withContext
-                }
-
-                // Read all headers
-                val headers = mutableListOf<String>()
-                var line: String?
-                while (reader.readLine().also { line = it } != null && line!!.isNotEmpty()) {
-                    headers.add(line!!)
-                    
-                    // STAGE 2: Extract User-Agent for device identification
-                    if (line!!.lowercase().startsWith("user-agent:")) {
-                        userAgent = line!!.substringAfter(":").trim()
-                        Log.i(TAG, "User-Agent detected: $userAgent")
-                    }
-                }
-
-                // Forward request to target server
-                val targetSocket = Socket()
-                try {
-                    targetSocket.connect(InetSocketAddress(host, port), 10000)
-                    val targetWriter = PrintWriter(targetSocket.getOutputStream(), true)
-                    val targetReader =
-                            BufferedReader(InputStreamReader(targetSocket.getInputStream()))
-
-                    // Send request to target
-                    targetWriter.println("$method $path $HTTP_VERSION")
-                    headers.forEach { header -> targetWriter.println(header) }
-                    targetWriter.println()
-                    targetWriter.flush()
-
-                    // Forward response back to client
-                    var responseLine: String?
-                    while (targetReader.readLine().also { responseLine = it } != null) {
-                        writer.println(responseLine)
-                    }
-                    writer.flush()
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to handle HTTP request", e)
-                    sendErrorResponse(writer, 502, "Bad Gateway")
-                } finally {
-                    targetSocket.close()
-                }
-            }
-
-    private suspend fun tunnelData(
-            input: InputStream,
-            output: OutputStream,
-            bytesCounter: AtomicLong
-    ) =
-            withContext(Dispatchers.IO) {
-                val buffer = ByteArray(BUFFER_SIZE)
-                var bytesRead: Int
-                while (input.read(buffer).also { bytesRead = it } != -1) {
-                    // TODO: HANCHEN - Replace this direct forwarding with VPN tunnel forwarding
-                    // Currently: Direct forwarding to target
-                    // Should be: Forward through VPN tunnel for encryption
-                    forwardThroughVpn(buffer, bytesRead, output)
-                    output.flush()
-                    
-                    // STAGE 2: Track bytes and record traffic
-                    val bytes = bytesRead.toLong()
-                    bytesCounter.addAndGet(bytes)
-                    
-                    // Determine if this is upload or download
-                    val isUpload = bytesCounter == bytesUp
-                    
-                    if (isUpload) {
-                        trafficMeter.recordTraffic(clientIp, bytes, 0)
-                        Log.d(TAG, "↑ Upload: $bytes bytes from $clientIp")
-                    } else {
-                        trafficMeter.recordTraffic(clientIp, 0, bytes)
-                        Log.d(TAG, "↓ Download: $bytes bytes to $clientIp")
-                    }
-                }
-            }
-
-    /**
-     * VPN Integration Point for Hanchen
-     *
-     * HANCHEN: This is where you need to integrate your VPN tunnel. Instead of writing directly to
-     * the output stream, you should:
-     * 1. Check if VPN is connected
-     * 2. Forward the data through your VPN tunnel
-     * 3. Let the VPN tunnel handle the actual internet communication
-     *
-     * @param data The data to forward through VPN
-     * @param length Number of bytes to forward
-     * @param output The output stream (currently used for direct forwarding)
-     */
-    private suspend fun forwardThroughVpn(data: ByteArray, length: Int, output: OutputStream) {
-        // TODO: HANCHEN - Implement VPN forwarding here
-        //
-        // Example integration:
-        // 1. Check VPN status: vpnManager.getConnectionStatus()
-        // 2. If VPN is connected, forward through VPN tunnel
-        // 3. If VPN is not connected, either:
-        //    - Block the traffic (secure option)
-        //    - Forward directly (current behavior)
-        //    - Queue for later when VPN connects
-        //
-        // For now, we're forwarding directly
-        output.write(data, 0, length)
-
-        Log.d(TAG, "HANCHEN: Data forwarded directly (VPN integration pending)")
-    }
-
-    private fun parseHostPort(url: String): Pair<String?, Int> {
-        return try {
-            val parts = url.split(":")
-            if (parts.size == 2) {
-                Pair(parts[0], parts[1].toInt())
-            } else {
-                Pair(null, -1)
-            }
-        } catch (e: Exception) {
-            Pair(null, -1)
+        if (method.equals(CONNECT_METHOD, ignoreCase = true)) {
+            handleConnectRequest(reader, writer, url)
+        } else {
+            handleHttpRequest(reader, writer, method, url)
         }
     }
 
-    private fun parseHttpUrl(url: String): Triple<String?, Int, String> {
-        return try {
-            val uri = URI(url)
-            val host = uri.host
-            val port = if (uri.port != -1) uri.port else 80
-            val path = uri.path + if (uri.query != null) "?${uri.query}" else ""
-            Triple(host, port, path)
+    /** CONNECT method: establish a TCP tunnel and pump bytes both ways */
+    private suspend fun handleConnectRequest(
+        reader: BufferedReader,
+        writer: PrintWriter,
+        url: String
+    ) = withContext(Dispatchers.IO) {
+        Log.i(TAG, "HTTPS CONNECT request to: $url from $clientIp")
+
+        val (host, port) = parseHostPort(url)
+        if (host == null || port == -1) {
+            sendErrorResponse(writer, 400, "Bad Request - Invalid host:port")
+            return@withContext
+        }
+
+        // Track target host for session
+        hostsAccessed.add(host)
+        // (trafficMeter as? TrafficMeterSimple)?.updateSessionTarget(sessionId, host) // 如果你实现了的话
+
+        // 200 Established, then raw tunnel
+        writer.println("$HTTP_VERSION 200 Connection Established")
+        writer.println("Proxy-Agent: ShieldShare/1.0")
+        writer.println()
+        writer.flush()
+
+        // Create target socket via VPN-bound factory
+        val targetSocket = connectTarget(host, port)
+        try {
+            val t1 = scope.launch {
+                // client -> target (upload)
+                tunnelData(
+                    input = socket.getInputStream(),
+                    output = targetSocket.getOutputStream(),
+                    isUpload = true
+                )
+            }
+            val t2 = scope.launch {
+                // target -> client (download)
+                tunnelData(
+                    input = targetSocket.getInputStream(),
+                    output = socket.getOutputStream(),
+                    isUpload = false
+                )
+            }
+            joinAll(t1, t2)
         } catch (e: Exception) {
-            Triple(null, -1, "")
+            Log.e(TAG, "Failed CONNECT to $host:$port", e)
+            // If the connection is failed
+        } finally {
+            safeClose(targetSocket)
+        }
+    }
+
+    /** Plain HTTP proxying (no TLS termination) */
+    private suspend fun handleHttpRequest(
+        reader: BufferedReader,
+        writer: PrintWriter,
+        method: String,
+        url: String
+    ) = withContext(Dispatchers.IO) {
+        Log.d(TAG, "Handling HTTP request: $method $url")
+
+        // Read all headers (text-mode)
+        val headers = mutableListOf<String>()
+        var line: String?
+        while (reader.readLine().also { line = it } != null && line!!.isNotEmpty()) {
+            val h = line!!
+            headers.add(h)
+            if (h.lowercase().startsWith("user-agent:")) {
+                userAgent = h.substringAfter(":").trim()
+            }
+        }
+
+        // Parse URL and fall back to Host header if the request line was relative-form
+        val (hostFromUrl, portFromUrl, pathFromUrl) = parseHttpUrl(url)
+        val hostHeader = headers.firstOrNull { it.startsWith("Host:", ignoreCase = true) }
+            ?.substringAfter(":")?.trim()
+        val (host, port, path) = when {
+            hostFromUrl != null -> Triple(hostFromUrl, portFromUrl, pathFromUrl)
+            hostHeader != null -> {
+                val (hh, hp) = splitHostPort(hostHeader, defaultPort = 80)
+                Triple(hh, hp, url) // url was likely relative path
+            }
+            else -> Triple(null, -1, url)
+        }
+
+        if (host == null || port <= 0) {
+            sendErrorResponse(writer, 400, "Bad Request - Invalid URL/Host")
+            return@withContext
+        }
+
+        hostsAccessed.add(host)
+
+        // Build request preface to forward to target
+        val sb = StringBuilder()
+        sb.append("$method $path $HTTP_VERSION\r\n")
+        headers.forEach { h -> sb.append(h).append("\r\n") }
+        sb.append("\r\n")
+        val preface = sb.toString().toByteArray(Charsets.US_ASCII)
+
+        // Forward to target via VPN-bound socket
+        val targetSocket = connectTarget(host, port)
+        try {
+            val targetOut = BufferedOutputStream(targetSocket.getOutputStream())
+            val targetIn = BufferedInputStream(targetSocket.getInputStream())
+            val clientOut = BufferedOutputStream(socket.getOutputStream())
+
+            // Send request line + headers
+            forwardThroughVpn(preface, preface.size, targetOut)
+            targetOut.flush()
+
+            // Stream response bytes back to client
+            val buffer = ByteArray(BUFFER_SIZE)
+            var totalDown = 0L
+            while (true) {
+                val n = targetIn.read(buffer)
+                if (n <= 0) break
+                clientOut.write(buffer, 0, n)
+                totalDown += n
+            }
+            clientOut.flush()
+
+            // traffic accounting
+            bytesDown.addAndGet(totalDown)
+            trafficMeter.recordTraffic(clientIp, 0, totalDown)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to handle HTTP request to $host:$port", e)
+            sendErrorResponse(writer, 502, "Bad Gateway")
+        } finally {
+            safeClose(targetSocket)
+        }
+    }
+
+    /**
+     * Copy bytes from input to output.
+     * If isUpload = true, bytes are accounted as client -> target (↑).
+     * If false, as target -> client (↓).
+     */
+    private suspend fun tunnelData(
+        input: InputStream,
+        output: OutputStream,
+        isUpload: Boolean
+    ) = withContext(Dispatchers.IO) {
+        val buffer = ByteArray(BUFFER_SIZE)
+        var total = 0L
+        while (true) {
+            val n = input.read(buffer)
+            if (n <= 0) break
+            forwardThroughVpn(buffer, n, output)
+            total += n
+        }
+        output.flush()
+
+        if (isUpload) {
+            bytesUp.addAndGet(total)
+            trafficMeter.recordTraffic(clientIp, total, 0)
+            Log.d(TAG, "↑ Upload: $total bytes from $clientIp")
+        } else {
+            bytesDown.addAndGet(total)
+            trafficMeter.recordTraffic(clientIp, 0, total)
+            Log.d(TAG, "↓ Download: $total bytes to $clientIp")
+        }
+    }
+
+    /**
+     * Note: Under the current approach of using the system-level third-party VPN,
+     * there is no need to “write into a VPN tunnel” here.
+     * All outbound sockets are already bound to the VPN via activeNetwork.socketFactory.
+     * This method is only for logging and policy control.
+     */
+    private suspend fun forwardThroughVpn(data: ByteArray, length: Int, output: OutputStream) {
+        withContext(Dispatchers.IO) {
+            output.write(data, 0, length) // output belongs to a VPN-bound target socket
+        }
+    }
+
+    /** Create a target connection using the VPN-bound SocketFactory */
+    private fun connectTarget(host: String, port: Int): Socket {
+        return socketFactory.createSocket().apply {
+            connect(InetSocketAddress(host, port), /* connect timeout */ 10_000)
+            soTimeout = 30_000
         }
     }
 
@@ -307,34 +291,62 @@ class HttpProxyHandler(
         }
 
         // STAGE 2: End traffic session and log summary
-        sessionId?.let { sessionId ->
-            (trafficMeter as? TrafficMeterSimple)?.endSession(sessionId)
+        sessionId?.let { sid ->
+            (trafficMeter as? TrafficMeterSimple)?.endSession(sid)
         }
-        
+
         val totalUp = bytesUp.get()
         val totalDown = bytesDown.get()
-        
-        // Get MAC address for enhanced logging
-        val macAddress = (trafficMeter as? TrafficMeterSimple)?.mapIpToMac()?.get(clientIp) ?: "unknown"
-        
+        val macAddress = (trafficMeter as? TrafficMeterSimple)?.mapIpToMac()
+            ?.get(clientIp) ?: "unknown"
+
         Log.i(TAG, "**HTTP session ended** for $clientIp ($macAddress)")
         Log.i(TAG, "   ↑ **Total Upload**: ${formatBytes(totalUp)}")
         Log.i(TAG, "   ↓ **Total Download**: ${formatBytes(totalDown)}")
         Log.i(TAG, "   **Hosts Accessed**: ${hostsAccessed.size} - ${hostsAccessed.joinToString(", ")}")
         Log.i(TAG, "   **User Agent**: ${userAgent ?: "Unknown"}")
 
-        // Report traffic statistics
         trafficCallback(totalUp, totalDown)
-
         scope.cancel()
     }
-    
-    private fun formatBytes(bytes: Long): String {
-        return when {
-            bytes < 1024 -> "$bytes B"
-            bytes < 1024 * 1024 -> "${bytes / 1024} KB"
-            bytes < 1024 * 1024 * 1024 -> "${bytes / (1024 * 1024)} MB"
-            else -> "${bytes / (1024 * 1024 * 1024)} GB"
+
+    private fun parseHostPort(url: String): Pair<String?, Int> = try {
+        val parts = url.split(":")
+        if (parts.size == 2) parts[0] to parts[1].toInt() else null to -1
+    } catch (_: Throwable) {
+        null to -1
+    }
+
+    /** For absolute-form proxy requests (http://host:port/path). */
+    private fun parseHttpUrl(url: String): Triple<String?, Int, String> = try {
+        val uri = URI(url)
+        val host = uri.host
+        val port = if (uri.port != -1) uri.port else 80
+        val path = (uri.rawPath ?: "/") +
+                (if (uri.rawQuery != null) "?${uri.rawQuery}" else "")
+        Triple(host, port, path)
+    } catch (_: Throwable) {
+        Triple(null, -1, url)
+    }
+
+    private fun splitHostPort(hostHeader: String, defaultPort: Int): Pair<String, Int> {
+        val idx = hostHeader.lastIndexOf(':')
+        return if (idx > 0 && idx < hostHeader.length - 1 && hostHeader.indexOf(']') == -1) {
+            // simple host:port (no IPv6 bracket form)
+            val h = hostHeader.substring(0, idx).trim()
+            val p = hostHeader.substring(idx + 1).trim().toIntOrNull() ?: defaultPort
+            h to p
+        } else {
+            hostHeader.trim() to defaultPort
         }
+    }
+
+    private fun safeClose(s: Socket?) = try { s?.close() } catch (_: Throwable) {}
+
+    private fun formatBytes(bytes: Long): String = when {
+        bytes < 1024 -> "$bytes B"
+        bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+        bytes < 1024 * 1024 * 1024 -> "${bytes / (1024 * 1024)} MB"
+        else -> "${bytes / (1024 * 1024 * 1024)} GB"
     }
 }
