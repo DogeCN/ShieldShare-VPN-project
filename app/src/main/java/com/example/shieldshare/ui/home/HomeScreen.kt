@@ -11,7 +11,6 @@ import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.WifiTethering
-import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -90,7 +89,7 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
                         Column(
                                 modifier =
                                         Modifier.fillMaxSize()
-                                                .padding(horizontal = 20.dp)
+                                                .padding(horizontal = 12.dp)
                                                 .safeDrawingPadding(),
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -113,6 +112,14 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.fillMaxWidth()
                                 )
+
+                                // IP Addresses Section
+                                IpAddressRow(
+                                        localIp = uiState.localIpAddress,
+                                        publicIp = uiState.publicIpAddress,
+                                        loading = uiState.isFetchingIp,
+                                        onRefresh = { viewModel.refreshIp() }
+                                )
                         }
 
                         // Controls and stats
@@ -124,14 +131,6 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                                // IP Addresses Section
-                                IpAddressRow(
-                                        localIp = uiState.localIpAddress,
-                                        publicIp = uiState.publicIpAddress,
-                                        loading = uiState.isFetchingIp,
-                                        onRefresh = { viewModel.refreshIp() }
-                                )
-
                                 // VPN Status Card
                                 VpnStatusCard(
                                         isConnected = uiState.isVpnConnected,
@@ -144,7 +143,6 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
 
                                 // Status card
                                 StatusCard(
-                                        isConnected = uiState.isVpnConnected,
                                         uploadSpeed = uiState.uploadSpeed,
                                         downloadSpeed = uiState.downloadSpeed,
                                         connections = uiState.activeConnections,
@@ -207,9 +205,9 @@ fun VpnStatusCard(isConnected: Boolean, onClick: () -> Unit) {
                 modifier = Modifier.fillMaxWidth().height(210.dp),
                 colors =
                         CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.onTertiary
+                                containerColor = MaterialTheme.colorScheme.onTertiary.copy(alpha=0.7f)
                         ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
                 shape = RoundedCornerShape(20.dp)
         ) {
                 Column(
@@ -221,7 +219,7 @@ fun VpnStatusCard(isConnected: Boolean, onClick: () -> Unit) {
                         Icon(
                                 imageVector = Icons.Default.Security,
                                 contentDescription = null,
-                                modifier = Modifier.size(48.dp),
+                                modifier = Modifier.size(45.dp),
                                 tint =
                                         if (isConnected) MaterialTheme.colorScheme.primary
                                         else MaterialTheme.colorScheme.onSurfaceVariant
@@ -260,7 +258,7 @@ fun VpnStatusCard(isConnected: Boolean, onClick: () -> Unit) {
                                         ButtonDefaults.buttonColors(
                                                 containerColor =
                                                         if (isConnected)
-                                                                MaterialTheme.colorScheme.secondary
+                                                                MaterialTheme.colorScheme.error
                                                         else MaterialTheme.colorScheme.primary
                                         ),
                                 shape = RoundedCornerShape(12.dp)
@@ -277,7 +275,6 @@ fun VpnStatusCard(isConnected: Boolean, onClick: () -> Unit) {
 
 @Composable
 fun StatusCard(
-        isConnected: Boolean,
         uploadSpeed: String,
         downloadSpeed: String,
         connections: Int,
@@ -287,9 +284,9 @@ fun StatusCard(
                 modifier = Modifier.fillMaxWidth().height(70.dp),
                 colors =
                         CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.onTertiary
+                                containerColor = MaterialTheme.colorScheme.onTertiary.copy(alpha=0.8f)
                         ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
                 shape = RoundedCornerShape(20.dp)
         ) {
 
@@ -406,9 +403,9 @@ fun ControlCard(
                 modifier = modifier,
                 colors =
                         CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.onTertiary
+                                containerColor = MaterialTheme.colorScheme.onTertiary.copy(alpha=0.8f)
                         ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
                 shape = RoundedCornerShape(20.dp)
         ) {
                 Box(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
@@ -679,9 +676,9 @@ fun ProxyStatusCard(
                 modifier = modifier,
                 colors =
                         CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.onTertiary
+                                containerColor = MaterialTheme.colorScheme.onTertiary.copy(alpha=0.8f)
                         ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
                 shape = RoundedCornerShape(20.dp)
         ) {
                 Box(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
