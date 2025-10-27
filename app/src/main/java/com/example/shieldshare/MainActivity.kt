@@ -46,22 +46,25 @@ fun MainAppContent() {
     val appPrefs = remember { AppPrefs(context) }
     
     // Create a mutable state for theme mode that can be updated
-    val themeModeState = remember { mutableStateOf(loadThemeMode(appPrefs)) }
+    var themeMode by remember { mutableStateOf(loadThemeMode(appPrefs)) }
     
-    // Remember the reload function to avoid recreating it
-    val reloadTheme = remember {
-        {
-            themeModeState.value = loadThemeMode(appPrefs)
+    // Track reload requests with a key
+    var reloadKey by remember { mutableIntStateOf(0) }
+    
+    // Reload theme when key changes
+    LaunchedEffect(reloadKey) {
+        if (reloadKey > 0) {
+            themeMode = loadThemeMode(appPrefs)
         }
     }
     
-    ShieldShareTheme(themeMode = themeModeState.value) {
+    ShieldShareTheme(themeMode = themeMode) {
         Surface(
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background
         ) {
-            // Pass reloadTheme to ShieldShareAppContent so settings can trigger it
-            ShieldShareAppContent(reloadTheme)
+            // Pass a callback that increments the reload key
+            ShieldShareAppContent(onThemeChange = { reloadKey++ })
         }
     }
 }
