@@ -5,10 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Wifi
@@ -134,17 +132,12 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
                                         onRefresh = { viewModel.refreshIp() }
                                 )
 
-                                // Button
-                                ConnectButton(
+                                // VPN Status Card
+                                VpnStatusCard(
                                         isConnected = uiState.isVpnConnected,
-                                        isConnecting = uiState.isVpnConnecting,
                                         onClick = {
                                                 scope.launch {
-                                                        if (uiState.isVpnConnected) {
-                                                                viewModel.stopVpn()
-                                                        } else {
-                                                                viewModel.startVpn()
-                                                        }
+                                                        viewModel.startVpn()
                                                 }
                                         }
                                 )
@@ -176,7 +169,6 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
                                                         else if (uiState.isProxyRunning)
                                                                 "HTTP/HTTPS ${uiState.httpPort} · SOCKS5 ${uiState.socks5Port}"
                                                         else "Not running",
-                                                isActive = uiState.isProxyRunning,
                                                 isDisabled = !uiState.isHotspotEnabled,
                                                 onQrClick = { showQrDialog = true }
                                         )
@@ -210,65 +202,73 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
 }
 
 @Composable
-fun ConnectButton(isConnected: Boolean, isConnecting: Boolean, onClick: () -> Unit) {
-        val buttonText =
-                when {
-                        isConnecting -> "Connecting..."
-                        isConnected -> "Disconnect"
-                        else -> "Connect VPN"
-                }
-
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                // Main button
-                Button(
-                        onClick = onClick,
-                        modifier =
-                                Modifier.size(200.dp)
-                                        .clip(CircleShape)
-                                        .border(
-                                                width = 18.dp,
-                                                color =
-                                                        if (isConnected)
-                                                                MaterialTheme.colorScheme.onPrimary
-                                                                        .copy(
-                                                                                alpha = 0.2f
-                                                                        ) // Light border when
-                                                        // connected
-                                                        else
-                                                                MaterialTheme.colorScheme.primary
-                                                                        .copy(alpha = 0.1f),
-                                                shape = CircleShape
-                                        )
-                                        .clip(CircleShape),
-                        colors =
-                                ButtonDefaults.buttonColors(
-                                        containerColor =
-                                                if (isConnected) MaterialTheme.colorScheme.primary
-                                                else MaterialTheme.colorScheme.surfaceVariant
-                                ),
-                        enabled = !isConnecting
+fun VpnStatusCard(isConnected: Boolean, onClick: () -> Unit) {
+        Card(
+                modifier = Modifier.fillMaxWidth().height(210.dp),
+                colors =
+                        CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.onTertiary
+                        ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                shape = RoundedCornerShape(20.dp)
+        ) {
+                Column(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                        Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
-                        ) {
-                                Icon(
-                                        imageVector = Icons.Default.PowerSettingsNew,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(40.dp),
-                                        tint =
-                                                if (isConnected) MaterialTheme.colorScheme.onPrimary
-                                                else MaterialTheme.colorScheme.primary
-                                )
-                                Spacer(modifier = Modifier.height(6.dp))
+                        // Status Icon
+                        Icon(
+                                imageVector = Icons.Default.Security,
+                                contentDescription = null,
+                                modifier = Modifier.size(48.dp),
+                                tint =
+                                        if (isConnected) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        
+                        // Status Text
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text(
-                                        text = buttonText,
-                                        style = MaterialTheme.typography.titleSmall,
+                                        text = if (isConnected) "VPN Protected" else "No VPN Detected",
+                                        style = MaterialTheme.typography.headlineSmall,
                                         fontWeight = FontWeight.Bold,
                                         color =
-                                                if (isConnected) MaterialTheme.colorScheme.onPrimary
-                                                else MaterialTheme.colorScheme.primary,
+                                                if (isConnected)
+                                                        MaterialTheme.colorScheme.primary
+                                                else
+                                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                        text =
+                                                if (isConnected)
+                                                        "Your connection is secured"
+                                                else
+                                                        "Connect a VPN to get started",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         textAlign = TextAlign.Center
+                                )
+                        }
+                        
+                        // Action Button
+                        Button(
+                                onClick = onClick,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors =
+                                        ButtonDefaults.buttonColors(
+                                                containerColor =
+                                                        if (isConnected)
+                                                                MaterialTheme.colorScheme.secondary
+                                                        else MaterialTheme.colorScheme.primary
+                                        ),
+                                shape = RoundedCornerShape(12.dp)
+                        ) {
+                                Text(
+                                        text = if (isConnected) "Open VPN Settings" else "Setup VPN",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold
                                 )
                         }
                 }
@@ -284,7 +284,7 @@ fun StatusCard(
         latency: String
 ) {
         Card(
-                modifier = Modifier.fillMaxWidth().height(120.dp),
+                modifier = Modifier.fillMaxWidth().height(70.dp),
                 colors =
                         CardDefaults.cardColors(
                                 containerColor = MaterialTheme.colorScheme.onTertiary
@@ -292,42 +292,11 @@ fun StatusCard(
                 elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
                 shape = RoundedCornerShape(20.dp)
         ) {
-                Column(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                        // Status indicator
-                        Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.Center
-                        ) {
-                                Icon(
-                                        imageVector =
-                                                if (isConnected) Icons.Default.Security
-                                                else Icons.Outlined.Security,
-                                        contentDescription = null,
-                                        tint =
-                                                if (isConnected) MaterialTheme.colorScheme.primary
-                                                else MaterialTheme.colorScheme.outline,
-                                        modifier = Modifier.size(20.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                        text = if (isConnected) "Connected" else "Not Connected",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color =
-                                                if (isConnected) MaterialTheme.colorScheme.primary
-                                                else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
 
                         // Stats
-                        Row(
-                                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                        Row( modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                                verticalAlignment = Alignment.CenterVertically,
                         ) {
                                 // Upload
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -418,7 +387,7 @@ fun StatusCard(
                                                 fontWeight = FontWeight.Medium
                                         )
                                 }
-                        }
+
                 }
         }
 }
@@ -432,7 +401,6 @@ fun ControlCard(
         isActive: Boolean,
         onStart: () -> Unit,
         onStop: () -> Unit,
-        isDisabled: Boolean = false
 ) {
         Card(
                 modifier = modifier,
@@ -441,7 +409,7 @@ fun ControlCard(
                                 containerColor = MaterialTheme.colorScheme.onTertiary
                         ),
                 elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-                shape = RoundedCornerShape(16.dp)
+                shape = RoundedCornerShape(20.dp)
         ) {
                 Box(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
                         // Reserve space for alignment (same as ProxyStatusCard)
@@ -473,7 +441,7 @@ fun ControlCard(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         textAlign = TextAlign.Center
                                 )
-                                Spacer(modifier = Modifier.height(8.dp))
+                                Spacer(modifier = Modifier.height(10.dp))
                                 Button(
                                         onClick = if (isActive) onStop else onStart,
                                         colors =
@@ -704,7 +672,6 @@ fun ProxyStatusCard(
         icon: ImageVector,
         title: String,
         subtitle: String,
-        isActive: Boolean,
         isDisabled: Boolean = false,
         onQrClick: () -> Unit = {}
 ) {
@@ -715,7 +682,7 @@ fun ProxyStatusCard(
                                 containerColor = MaterialTheme.colorScheme.onTertiary
                         ),
                 elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-                shape = RoundedCornerShape(16.dp)
+                shape = RoundedCornerShape(20.dp)
         ) {
                 Box(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
                         // Reserve space for alignment (same as ControlCard)
