@@ -205,9 +205,9 @@ fun VpnStatusCard(isConnected: Boolean, onClick: () -> Unit) {
                 modifier = Modifier.fillMaxWidth().height(210.dp),
                 colors =
                         CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.onTertiary.copy(alpha=0.7f)
+                                containerColor = MaterialTheme.colorScheme.onTertiary
                         ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
                 shape = RoundedCornerShape(20.dp)
         ) {
                 Column(
@@ -224,7 +224,7 @@ fun VpnStatusCard(isConnected: Boolean, onClick: () -> Unit) {
                                         if (isConnected) MaterialTheme.colorScheme.primary
                                         else MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        
+
                         // Status Text
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text(
@@ -249,7 +249,7 @@ fun VpnStatusCard(isConnected: Boolean, onClick: () -> Unit) {
                                         textAlign = TextAlign.Center
                                 )
                         }
-                        
+
                         // Action Button
                         Button(
                                 onClick = onClick,
@@ -284,9 +284,9 @@ fun StatusCard(
                 modifier = Modifier.fillMaxWidth().height(70.dp),
                 colors =
                         CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.onTertiary.copy(alpha=0.8f)
+                                containerColor = MaterialTheme.colorScheme.onTertiary
                         ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
                 shape = RoundedCornerShape(20.dp)
         ) {
 
@@ -403,9 +403,9 @@ fun ControlCard(
                 modifier = modifier,
                 colors =
                         CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.onTertiary.copy(alpha=0.8f)
+                                containerColor = MaterialTheme.colorScheme.onTertiary
                         ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
                 shape = RoundedCornerShape(20.dp)
         ) {
                 Box(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
@@ -676,9 +676,9 @@ fun ProxyStatusCard(
                 modifier = modifier,
                 colors =
                         CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.onTertiary.copy(alpha=0.8f)
+                                containerColor = MaterialTheme.colorScheme.onTertiary
                         ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
                 shape = RoundedCornerShape(20.dp)
         ) {
                 Box(modifier = Modifier.fillMaxWidth().padding(16.dp)) {

@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.shieldshare.data.prefs.AppPrefs
 import com.example.shieldshare.managers.proxy.ProxyServer
+import com.example.shieldshare.ui.theme.ThemeMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Job
@@ -31,10 +32,17 @@ constructor(
 
     private fun loadSettings() {
         viewModelScope.launch {
+            val themeModeString = appPrefs.getString("theme_mode", "SYSTEM") ?: "SYSTEM"
+            val themeMode = try {
+                ThemeMode.valueOf(themeModeString)
+            } catch (e: Exception) {
+                ThemeMode.SYSTEM
+            }
+            
             _uiState.value =
                     SettingsUiState(
                             authEnabled = appPrefs.getBoolean("auth_enabled", false),
-                            darkMode = appPrefs.getBoolean("dark_mode", false),
+                            themeMode = themeMode,
                             notificationsEnabled =
                                     appPrefs.getBoolean("notifications_enabled", true),
                             databaseEncryption = appPrefs.getBoolean("database_encryption", false)
@@ -47,14 +55,10 @@ constructor(
         _uiState.value = _uiState.value.copy(authEnabled = enabled)
     }
 
-    // TODO: Add database encryption functionality
-    fun updateDatabaseEncryption(enabled: Boolean) {
-        _uiState.value = _uiState.value.copy(databaseEncryption = enabled)
-    }
-
-    // TODO: Add dark mode functionality
-    fun updateDarkMode(enabled: Boolean) {
-        _uiState.value = _uiState.value.copy(darkMode = enabled)
+    fun updateThemeMode(themeMode: ThemeMode) {
+        _uiState.value = _uiState.value.copy(themeMode = themeMode)
+        // Auto-save theme mode immediately for instant feedback
+        appPrefs.putString("theme_mode", themeMode.name)
     }
 
     // TODO: Add notifications functionality
@@ -66,7 +70,7 @@ constructor(
         viewModelScope.launch {
             val state = _uiState.value
             appPrefs.putBoolean("auth_enabled", state.authEnabled)
-            appPrefs.putBoolean("dark_mode", state.darkMode)
+            appPrefs.putString("theme_mode", state.themeMode.name)
             appPrefs.putBoolean("notifications_enabled", state.notificationsEnabled)
             appPrefs.putBoolean("database_encryption", state.databaseEncryption)
         }
@@ -75,7 +79,7 @@ constructor(
 
 data class SettingsUiState(
         val authEnabled: Boolean = false,
-        val darkMode: Boolean = false,
+        val themeMode: ThemeMode = ThemeMode.SYSTEM,
         val notificationsEnabled: Boolean = true,
         val databaseEncryption: Boolean = false
 )
