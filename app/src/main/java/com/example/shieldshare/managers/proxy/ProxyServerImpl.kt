@@ -29,12 +29,35 @@ class ProxyServerImpl(
         private const val TAG = "ProxyServerImpl"
     }
 
-    private var serverSocket: ServerSocket? = null
+    private var httpServerSocket: ServerSocket? = null
+    private var socksServerSocket: ServerSocket? = null
     private var webServerSocket: ServerSocket? = null
     private val proxyHandlers = ConcurrentHashMap<String, ProxyHandler>()
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val clientDetectionScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var currentInstance: ProxyInstance? = null
+
+    private fun createServerSocket(port: Int, hotspotIp: String?): ServerSocket {
+        val bindAddress =
+                if (hotspotIp != null) {
+                    InetSocketAddress(hotspotIp, port)
+                } else {
+                    InetSocketAddress("0.0.0.0", port)
+                }
+        return ServerSocket().apply {
+            reuseAddress = true
+            soTimeout = 30000
+            bind(bindAddress)
+        }
+    }
+
+    private fun closeServer(socket: ServerSocket?) {
+        try {
+            socket?.close()
+        } catch (t: Throwable) {
+            Log.w(TAG, "Error closing server socket", t)
+        }
+    }
 
     // Track unique client IPs for counting
     private val connectedClients = ConcurrentHashMap<String, Long>() // IP -> timestamp
@@ -43,32 +66,31 @@ class ProxyServerImpl(
     override suspend fun startProxy(config: ProxyConfig): Result<ProxyInstance> =
             withContext(Dispatchers.IO) {
                 try {
-                    if (serverSocket != null) {
+                    if (httpServerSocket != null || socksServerSocket != null) {
                         return@withContext Result.failure(Exception("Proxy server already running"))
                     }
 
-                    // Validate port configuration to prevent crashes
                     if (!ProxyPortManager.validatePortConfiguration(config)) {
                         Log.w(
                                 TAG,
-                                "Port configuration may cause conflicts. Consider using recommended ports."
+                                "Custom proxy ports detected; ShieldShare enforces dedicated defaults."
                         )
                     }
 
-                    // Try binding to the specific hotspot interface
                     val hotspotIp = hotspotManager.getHotspotIpAddress()
-                    val bindAddress =
-                            if (hotspotIp != null) {
-                                InetSocketAddress(hotspotIp, config.port)
-                            } else {
-                                InetSocketAddress("0.0.0.0", config.port)
-                            }
-                    serverSocket =
-                            ServerSocket().apply {
-                                reuseAddress = true
-                                soTimeout = 30000 // 30 second timeout
-                                bind(bindAddress)
-                            }
+
+                    try {
+                        httpServerSocket = createServerSocket(config.httpPort, hotspotIp)
+                        socksServerSocket = createServerSocket(config.socks5Port, hotspotIp)
+                    } catch (bindError: Exception) {
+                        Log.e(TAG, "Failed to bind proxy sockets", bindError)
+                        closeServer(httpServerSocket)
+                        closeServer(socksServerSocket)
+                        httpServerSocket = null
+                        socksServerSocket = null
+                        return@withContext Result.failure(bindError)
+                    }
+
                     val instance =
                             ProxyInstance(
                                     instanceId = "proxy_${System.currentTimeMillis()}",
@@ -76,21 +98,30 @@ class ProxyServerImpl(
                             )
                     currentInstance = instance
 
-                    Log.i(TAG, "Starting proxy server on port ${config.port}")
+                    Log.i(
+                            TAG,
+                            "Proxy servers bound (HTTP/HTTPS ${config.httpPort}, SOCKS5 ${config.socks5Port})"
+                    )
 
-                    // Start accepting connections
                     serviceScope.launch {
-                        Log.d(TAG, "Starting connection acceptor coroutine")
-                        acceptConnections()
+                        httpServerSocket?.let { socket ->
+                            Log.d(
+                                    TAG,
+                                    "Starting HTTP/HTTPS acceptor coroutine on port ${socket.localPort}"
+                            )
+                            acceptConnections(socket, "HTTP/HTTPS")
+                        }
                     }
 
-                    // Start web server for auto-configuration
-                    serviceScope.launch { startWebServer(config.port) }
+                    serviceScope.launch {
+                        socksServerSocket?.let { socket ->
+                            Log.d(TAG, "Starting SOCKS5 acceptor coroutine on port ${socket.localPort}")
+                            acceptConnections(socket, "SOCKS5")
+                        }
+                    }
 
-                    // Start client cleanup coroutine
+                    serviceScope.launch { startWebServer(config) }
                     serviceScope.launch { startClientCleanup() }
-
-                    // ENHANCEMENT: Start proactive client detection
                     serviceScope.launch {
                         Log.i(TAG, "Starting proactive client detection")
                         startClientScanning()
@@ -98,7 +129,7 @@ class ProxyServerImpl(
 
                     Result.success(instance)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to start proxy server", e)
+                    Log.e(TAG, "Failed to start proxy servers", e)
                     Result.failure(e)
                 }
             }
@@ -106,8 +137,10 @@ class ProxyServerImpl(
     override suspend fun stopProxy(): Result<Unit> =
             withContext(Dispatchers.IO) {
                 try {
-                    serverSocket?.close()
-                    serverSocket = null
+                    closeServer(httpServerSocket)
+                    closeServer(socksServerSocket)
+                    httpServerSocket = null
+                    socksServerSocket = null
 
                     webServerSocket?.close()
                     webServerSocket = null
@@ -136,20 +169,26 @@ class ProxyServerImpl(
         Log.d(TAG, "getProxyInfo() called - Connected clients count: $clientCount")
         return if (instance != null) {
             ProxyInfo(
-                    isRunning = serverSocket != null && !serverSocket!!.isClosed,
-                    port = instance.config.port,
+                    isRunning =
+                            (httpServerSocket?.isClosed == false) ||
+                                    (socksServerSocket?.isClosed == false),
+                    httpPort = instance.config.httpPort,
+                    httpsPort = instance.config.httpsPort,
+                    socks5Port = instance.config.socks5Port,
                     proxyType = instance.config.proxyType,
                     activeConnections = clientCount, // Use unique client count
                     pacFileUrl =
                             hotspotManager.getHotspotIpAddress()?.let { hotspotIp ->
-                                "http://$hotspotIp:${instance.config.port}/proxy.pac"
+                                "http://$hotspotIp:${ProxyPortManager.CONFIG_PORT}/proxy.pac"
                             }
                                     ?: "Not available"
             )
         } else {
             ProxyInfo(
                     isRunning = false,
-                    port = 0,
+                    httpPort = ProxyPortManager.HTTP_PORT,
+                    httpsPort = ProxyPortManager.HTTPS_PORT,
+                    socks5Port = ProxyPortManager.SOCKS5_PORT,
                     proxyType = ProxyType.BOTH,
                     activeConnections = 0
             )
@@ -276,33 +315,31 @@ class ProxyServerImpl(
         }
     }
 
-    private suspend fun acceptConnections() =
-            withContext(Dispatchers.IO) {
-                val socket = serverSocket
-                if (socket == null) {
-                    Log.e(TAG, "Server socket is null, cannot accept connections")
-                    return@withContext
-                }
+    private suspend fun acceptConnections(
+            serverSocket: ServerSocket,
+            protocolLabel: String
+    ) = withContext(Dispatchers.IO) {
+        Log.d(
+                TAG,
+                "$protocolLabel acceptor started, waiting for connections on port ${serverSocket.localPort}"
+        )
 
+        while (isActive && !serverSocket.isClosed) {
+            try {
+                val clientSocket = serverSocket.accept()
                 Log.d(
                         TAG,
-                        "Connection acceptor started, waiting for connections on port ${socket.localPort}"
+                        "[$protocolLabel] New client connection: ${clientSocket.remoteSocketAddress}"
                 )
-
-                while (isActive && !socket.isClosed) {
-                    try {
-                        Log.d(TAG, "Waiting for client connection...")
-                        val clientSocket = socket.accept()
-                        Log.d(TAG, "New client connection: ${clientSocket.remoteSocketAddress}")
-                        handleClientConnection(clientSocket)
-                    } catch (e: Exception) {
-                        if (!socket.isClosed) {
-                            Log.e(TAG, "Error accepting connection", e)
-                        }
-                    }
+                handleClientConnection(clientSocket)
+            } catch (e: Exception) {
+                if (!serverSocket.isClosed) {
+                    Log.e(TAG, "Error accepting $protocolLabel connection", e)
                 }
-                Log.d(TAG, "Connection acceptor stopped")
             }
+        }
+        Log.d(TAG, "$protocolLabel acceptor stopped")
+    }
 
     /**
      * （KEEP）VPN Integration Point for Hanchen
@@ -330,14 +367,15 @@ class ProxyServerImpl(
     }
 
     /** Start web server for auto-configuration page */
-    private suspend fun startWebServer(proxyPort: Int) {
+    private suspend fun startWebServer(config: ProxyConfig) {
         try {
             val hotspotIp = hotspotManager.getHotspotIpAddress()
+            val portalPort = ProxyPortManager.CONFIG_PORT
             val bindAddress =
                     if (hotspotIp != null) {
-                        java.net.InetSocketAddress(hotspotIp, proxyPort + 1)
+                        java.net.InetSocketAddress(hotspotIp, portalPort)
                     } else {
-                        java.net.InetSocketAddress("0.0.0.0", proxyPort + 1)
+                        java.net.InetSocketAddress("0.0.0.0", portalPort)
                     }
 
             webServerSocket =
@@ -346,13 +384,13 @@ class ProxyServerImpl(
                         bind(bindAddress)
                     }
 
-            Log.i(TAG, "Web server started on port ${proxyPort + 1}")
+            Log.i(TAG, "Web server started on port $portalPort")
 
             while (webServerSocket?.isClosed == false) {
                 try {
                     val clientSocket = webServerSocket?.accept()
                     if (clientSocket != null) {
-                        serviceScope.launch { handleWebRequest(clientSocket, proxyPort) }
+                        serviceScope.launch { handleWebRequest(clientSocket, config) }
                     }
                 } catch (e: Exception) {
                     if (webServerSocket?.isClosed == false) {
@@ -366,7 +404,7 @@ class ProxyServerImpl(
     }
 
     /** Handle web requests for auto-configuration */
-    private suspend fun handleWebRequest(socket: Socket, proxyPort: Int) {
+    private suspend fun handleWebRequest(socket: Socket, config: ProxyConfig) {
         try {
             val input = socket.getInputStream()
             val output = socket.getOutputStream()
@@ -376,7 +414,7 @@ class ProxyServerImpl(
 
             val hotspotIp = hotspotManager.getHotspotIpAddress() ?: "192.168.43.1"
 
-            val htmlContent = generateAutoConfigPage(hotspotIp, proxyPort)
+            val htmlContent = generateAutoConfigPage(hotspotIp, config)
             val contentBytes = htmlContent.toByteArray(Charsets.UTF_8)
 
             // Proper HTTP response format with \r\n line endings
@@ -398,7 +436,12 @@ class ProxyServerImpl(
     }
 
     /** Generate auto-configuration HTML page */
-    private fun generateAutoConfigPage(hotspotIp: String, proxyPort: Int): String {
+    private fun generateAutoConfigPage(hotspotIp: String, config: ProxyConfig): String {
+        val httpPort = config.httpPort
+        val httpsPort = config.httpsPort
+        val socksPort = config.socks5Port
+        val portalPort = ProxyPortManager.CONFIG_PORT
+        val pacUrl = "http://$hotspotIp:$portalPort/proxy.pac"
         return """
 <!DOCTYPE html>
 <html lang="en">
@@ -428,8 +471,8 @@ class ProxyServerImpl(
         </div>
         
         <div class="info">
-            <strong>Proxy Server:</strong> $hotspotIp:$proxyPort<br>
-            <strong>PAC URL:</strong> http://$hotspotIp:$proxyPort/proxy.pac
+            <strong>Gateway:</strong> $hotspotIp<br>
+            <strong>PAC URL:</strong> $pacUrl
         </div>
         
         <div class="config-section">
@@ -440,29 +483,18 @@ class ProxyServerImpl(
         </div>
         
         <div class="manual-config">
-            <h3>Manual Configuration</h3>
-            <p><strong>For Android:</strong></p>
-            <ol>
-                <li>Go to Settings → Wi-Fi</li>
-                <li>Long press your connected network</li>
-                <li>Modify → Advanced → Proxy → Manual</li>
-                <li>Server: <span class="mini-code">$hotspotIp</span></li>
-                <li>Port: <span class="mini-code">$proxyPort</span></li>
-            </ol>
-            
-            <p><strong>For iOS:</strong></p>
-            <ol>
-                <li>Settings → Wi-Fi → (i) icon</li>
-                <li>Configure Proxy → Manual</li>
-                <li>Server: <span class="mini-code">$hotspotIp</span></li>
-                <li>Port: <span class="mini-code">$proxyPort</span></li>
-            </ol>
+            <h3>Manual Proxy Settings</h3>
+            <p>Configure the following on your client device:</p>
+            <ul>
+                <li>HTTP/HTTPS Proxy: <span class="mini-code">$hotspotIp:$httpPort</span></li>
+                <li>SOCKS5 Proxy: <span class="mini-code">$hotspotIp:$socksPort</span></li>
+            </ul>
         </div>
         
         <div class="config-section">
             <h3>PAC Auto-Configuration</h3>
             <p>Use PAC file for automatic proxy routing:</p>
-            <div class="code">http://$hotspotIp:$proxyPort/proxy.pac</div>
+            <div class="code">$pacUrl</div>
             <p><small>Copy this URL to your device's Proxy Auto-Configuration settings</small></p>
         </div>
     </div>
@@ -471,16 +503,16 @@ class ProxyServerImpl(
         function autoConfigure() {
             // Try to open system proxy settings
             if (navigator.userAgent.includes('Android')) {
-                alert('Please manually configure proxy in Android Wi-Fi settings:\\n\\nServer: $hotspotIp\\nPort: $proxyPort');
+                alert('Please manually configure proxy in Android Wi-Fi settings:\\n\\nHTTP/HTTPS: $hotspotIp:$httpPort\\nSOCKS5: $hotspotIp:$socksPort');
             } else if (navigator.userAgent.includes('iPhone') || navigator.userAgent.includes('iPad')) {
-                alert('Please manually configure proxy in iOS Wi-Fi settings:\\n\\nServer: $hotspotIp\\nPort: $proxyPort');
+                alert('Please manually configure proxy in iOS Wi-Fi settings:\\n\\nHTTP/HTTPS: $hotspotIp:$httpPort\\nSOCKS5: $hotspotIp:$socksPort');
             } else {
                 alert('Auto-configuration not supported on this device.\\nPlease use manual configuration.');
             }
         }
         
         function downloadPAC() {
-            window.open('http://$hotspotIp:$proxyPort/proxy.pac', '_blank');
+            window.open('$pacUrl', '_blank');
         }
         
         // Auto-detect device type and show appropriate instructions
@@ -666,4 +698,3 @@ class ProxyServerImpl(
 
     private fun safeClose(s: Socket?) = try { s?.close() } catch (_: Throwable) {}
 }
-

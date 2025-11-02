@@ -174,7 +174,7 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
                                                         if (!uiState.isHotspotEnabled)
                                                                 "Hotspot required"
                                                         else if (uiState.isProxyRunning)
-                                                                "Port ${uiState.proxyPort}"
+                                                                "HTTP/HTTPS ${uiState.httpPort} · SOCKS5 ${uiState.socks5Port}"
                                                         else "Not running",
                                                 isActive = uiState.isProxyRunning,
                                                 isDisabled = !uiState.isHotspotEnabled,
@@ -586,7 +586,11 @@ fun QrCodeDialog(onDismiss: () -> Unit, viewModel: HomeViewModel, uiState: HomeU
 
                                 // QR Code Display
                                 val qrCode =
-                                        remember(uiState.localIpAddress, uiState.proxyPort) {
+                                        remember(
+                                                uiState.localIpAddress,
+                                                uiState.configPortalPort,
+                                                uiState.isProxyRunning
+                                        ) {
                                                 viewModel.generateQRCode()
                                         }
 
@@ -632,7 +636,11 @@ fun QrCodeDialog(onDismiss: () -> Unit, viewModel: HomeViewModel, uiState: HomeU
 
                                                 Text(
                                                         text =
-                                                                "Server: ${viewModel.getHotspotIp()}\nPort: ${uiState.proxyPort}",
+                                                                buildString {
+                                                                    appendLine("Server: ${viewModel.getHotspotIp()}")
+                                                                    appendLine("HTTP/HTTPS: ${uiState.httpPort}")
+                                                                    append("SOCKS5: ${uiState.socks5Port}")
+                                                                },
                                                         style = MaterialTheme.typography.bodySmall,
                                                         color = MaterialTheme.colorScheme.primary,
                                                         fontFamily =
@@ -663,7 +671,10 @@ fun QrCodeDialog(onDismiss: () -> Unit, viewModel: HomeViewModel, uiState: HomeU
 
                                                 Text(
                                                         text =
-                                                                "PAC URL: http://${viewModel.getHotspotIp()}:${uiState.proxyPort}/proxy.pac",
+                                                                "PAC URL: ${
+                                                                        uiState.pacUrl
+                                                                                ?: "http://${viewModel.getHotspotIp()}:${uiState.configPortalPort}/proxy.pac"
+                                                                }",
                                                         style = MaterialTheme.typography.bodySmall,
                                                         color = MaterialTheme.colorScheme.primary,
                                                         fontFamily =

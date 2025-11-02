@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.shieldshare.managers.proxy.ProxyPortManager
 
 @Composable
 fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
@@ -45,11 +46,11 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
                             fontWeight = FontWeight.SemiBold
                     )
 
-                    OutlinedTextField(
-                            value = uiState.proxyPort.toString(),
-                            onValueChange = { viewModel.updateProxyPort(it.toIntOrNull() ?: 8080) },
-                            label = { Text("Port") },
-                            modifier = Modifier.fillMaxWidth()
+                    Text(
+                            text =
+                                    "HTTP/HTTPS ${ProxyPortManager.HTTP_PORT}, SOCKS5 ${ProxyPortManager.SOCKS5_PORT}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
                     Row(

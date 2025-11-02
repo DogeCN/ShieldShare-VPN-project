@@ -73,7 +73,7 @@ class ProxyForegroundService : Service() {
                     .setSmallIcon(R.drawable.ic_launcher_foreground)
                     .setContentTitle("ShieldShare Proxy")
                     .setContentText(
-                            "Proxy server running on ports $HTTP_PROXY_PORT (HTTP) and $SOCKS5_PROXY_PORT (SOCKS5)"
+                            "Proxy server running on ports $HTTP_PROXY_PORT (HTTP/HTTPS) and $SOCKS5_PROXY_PORT (SOCKS5)"
                     )
                     .setOngoing(true)
                     .build()
@@ -158,7 +158,7 @@ class ProxyForegroundService : Service() {
                             <body>
                               <h1>ShieldShare Proxy</h1>
                               <p>Auto Proxy URL (PAC): <a href="$pacUrl">$pacUrl</a></p>
-                              <p>HTTP Proxy: $localAddr:$HTTP_PROXY_PORT</p>
+                              <p>HTTP/HTTPS Proxy: $localAddr:$HTTP_PROXY_PORT</p>
                               <p>SOCKS5 Proxy: $localAddr:$SOCKS5_PROXY_PORT</p>
                             </body>
                             </html>

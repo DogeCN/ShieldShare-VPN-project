@@ -33,7 +33,6 @@ constructor(
         viewModelScope.launch {
             _uiState.value =
                     SettingsUiState(
-                            proxyPort = appPrefs.getInt("proxy_port", 8080),
                             authEnabled = appPrefs.getBoolean("auth_enabled", false),
                             darkMode = appPrefs.getBoolean("dark_mode", false),
                             notificationsEnabled =
@@ -41,10 +40,6 @@ constructor(
                             databaseEncryption = appPrefs.getBoolean("database_encryption", false)
                     )
         }
-    }
-
-    fun updateProxyPort(port: Int) {
-        _uiState.value = _uiState.value.copy(proxyPort = port)
     }
 
     // TODO: Add authentication functionality
@@ -70,7 +65,6 @@ constructor(
     fun saveSettings() {
         viewModelScope.launch {
             val state = _uiState.value
-            appPrefs.putInt("proxy_port", state.proxyPort)
             appPrefs.putBoolean("auth_enabled", state.authEnabled)
             appPrefs.putBoolean("dark_mode", state.darkMode)
             appPrefs.putBoolean("notifications_enabled", state.notificationsEnabled)
@@ -80,7 +74,6 @@ constructor(
 }
 
 data class SettingsUiState(
-        val proxyPort: Int = 8080,
         val authEnabled: Boolean = false,
         val darkMode: Boolean = false,
         val notificationsEnabled: Boolean = true,

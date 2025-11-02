@@ -11,6 +11,7 @@ import com.example.shieldshare.data.prefs.AppPrefs
 import com.example.shieldshare.managers.hotspot.HotspotManager
 import com.example.shieldshare.managers.network.IpAddressProvider
 import com.example.shieldshare.managers.proxy.ProxyConfig
+import com.example.shieldshare.managers.proxy.ProxyPortManager
 import com.example.shieldshare.managers.proxy.ProxyServer
 import com.example.shieldshare.managers.proxy.ProxyType
 import com.example.shieldshare.managers.vpn.VpnManager
@@ -123,13 +124,10 @@ constructor(
     fun startProxyServer() {
         viewModelScope.launch {
             try {
-                // Load proxy settings from AppPrefs
-                val proxyPort = appPrefs.getInt("proxy_port", 8080)
                 val authEnabled = appPrefs.getBoolean("auth_enabled", false)
 
                 val config =
                         ProxyConfig(
-                                port = proxyPort,
                                 authEnabled = authEnabled,
                                 allowedClients = emptyList(),
                                 proxyType = ProxyType.BOTH
@@ -140,12 +138,21 @@ constructor(
                         onSuccess = { proxyInstance ->
                             Log.i(
                                     "HomeViewModel",
-                                    "Proxy server started on port ${config.port}: $proxyInstance"
+                                    "Proxy servers started (HTTP/HTTPS ${config.httpPort}, SOCKS5 ${config.socks5Port}): $proxyInstance"
                             )
+                            val hotspotIp = hotspotManager.getHotspotIpAddress()
+                            val pacUrl =
+                                    hotspotIp?.let {
+                                        "http://$it:${ProxyPortManager.CONFIG_PORT}/proxy.pac"
+                                    }
                             _uiState.value =
                                     _uiState.value.copy(
                                             isProxyRunning = true,
-                                            proxyPort = config.port,
+                                            httpPort = config.httpPort,
+                                            httpsPort = config.httpsPort,
+                                            socks5Port = config.socks5Port,
+                                            configPortalPort = ProxyPortManager.CONFIG_PORT,
+                                            pacUrl = pacUrl,
                                             uploadSpeed = "0 KB/s",
                                             downloadSpeed = "0 KB/s",
                                             latency = "0ms"
@@ -172,7 +179,10 @@ constructor(
                         onSuccess = {
                             Log.i("HomeViewModel", "Proxy server stopped")
                             _uiState.value =
-                                    _uiState.value.copy(isProxyRunning = false, proxyPort = 0)
+                                    _uiState.value.copy(
+                                            isProxyRunning = false,
+                                            pacUrl = null
+                                    )
                         },
                         onFailure = { error ->
                             Log.e("HomeViewModel", "Failed to stop proxy server", error)
@@ -237,7 +247,12 @@ constructor(
                         it.copy(
                                 isHotspotEnabled = isEnabled,
                                 hotspotClients = clientCount,
-                                activeConnections = clientCount // Update active connections too
+                                activeConnections = clientCount, // Update active connections too
+                                httpPort = proxyInfo.httpPort,
+                                httpsPort = proxyInfo.httpsPort,
+                                socks5Port = proxyInfo.socks5Port,
+                                pacUrl = proxyInfo.pacFileUrl,
+                                configPortalPort = ProxyPortManager.CONFIG_PORT
                         )
                     }
 
@@ -287,10 +302,15 @@ constructor(
 
     fun generateQRCode(): ImageBitmap? {
         val currentState = _uiState.value
-        val proxyPort = currentState.proxyPort
+        val portalPort = currentState.configPortalPort
 
-        if (proxyPort == 0) {
-            Log.w("HomeViewModel", "Cannot generate QR code: proxy port not available")
+        if (!currentState.isProxyRunning) {
+            Log.w("HomeViewModel", "Cannot generate QR code: proxy is not running")
+            return null
+        }
+
+        if (portalPort <= 0) {
+            Log.w("HomeViewModel", "Cannot generate QR code: configuration portal port not available")
             return null
         }
 
@@ -303,7 +323,7 @@ constructor(
             }
 
             // Create QR code that opens auto-configuration webpage
-            val qrContent = "http://$hotspotIp:${proxyPort + 1}/configure"
+            val qrContent = "http://$hotspotIp:$portalPort/configure"
 
             // Generate QR code bitmap
             val writer = QRCodeWriter()
@@ -333,7 +353,11 @@ data class HomeUiState(
         val isVpnConnected: Boolean = false,
         val isVpnConnecting: Boolean = false,
         val isProxyRunning: Boolean = false,
-        val proxyPort: Int = 0,
+        val httpPort: Int = ProxyPortManager.HTTP_PORT,
+        val httpsPort: Int = ProxyPortManager.HTTPS_PORT,
+        val socks5Port: Int = ProxyPortManager.SOCKS5_PORT,
+        val configPortalPort: Int = ProxyPortManager.CONFIG_PORT,
+        val pacUrl: String? = null,
         val activeConnections: Int = 0,
         val dataTransferred: String = "0 MB",
         val uploadSpeed: String = "0 KB/s",
