@@ -11,15 +11,13 @@ import java.net.NetworkInterface
 class PacFileGenerator {
     companion object {
         private const val TAG = "PacFileGenerator"
-        private const val HTTP_PROXY_PORT = 8080
-        private const val SOCKS5_PROXY_PORT = 1080
     }
 
     /** Generate PAC file content for the current hotspot network */
     fun generatePacFile(): String {
         val gatewayIp = getHotspotGatewayIp()
-        val httpProxy = "$gatewayIp:$HTTP_PROXY_PORT"
-        val socksProxy = "SOCKS5 $gatewayIp:$SOCKS5_PROXY_PORT"
+        val httpProxy = "$gatewayIp:${ProxyPortManager.HTTP_PORT}"
+        val socksProxy = "SOCKS5 $gatewayIp:${ProxyPortManager.SOCKS5_PORT}"
 
         return """
 function FindProxyForURL(url, host) {
@@ -51,7 +49,7 @@ function FindProxyForURL(url, host) {
     fun getPacFileUrl(): String {
         val gatewayIp = getHotspotGatewayIp()
         return if (gatewayIp != null) {
-            "http://$gatewayIp:$HTTP_PROXY_PORT/proxy.pac"
+            "http://$gatewayIp:${ProxyPortManager.CONFIG_PORT}/proxy.pac"
         } else {
             "Not available"
         }
@@ -116,7 +114,7 @@ function FindProxyForURL(url, host) {
         if (gatewayIp == null) {
             return "// PAC file not available - no local network detected"
         }
-        val httpProxy = "$gatewayIp:$HTTP_PROXY_PORT"
+        val httpProxy = "$gatewayIp:${ProxyPortManager.HTTP_PORT}"
 
         return """
 function FindProxyForURL(url, host) {
@@ -129,7 +127,7 @@ function FindProxyForURL(url, host) {
     /** Generate PAC file with authentication */
     fun generatePacFileWithAuth(username: String, password: String): String {
         val gatewayIp = getHotspotGatewayIp()
-        val httpProxy = "$gatewayIp:$HTTP_PROXY_PORT"
+        val httpProxy = "$gatewayIp:${ProxyPortManager.HTTP_PORT}"
 
         return """
 function FindProxyForURL(url, host) {

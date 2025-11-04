@@ -6,10 +6,17 @@ import com.example.shieldshare.managers.hotspot.HotspotManager
 import com.example.shieldshare.managers.meter.TrafficMeter
 import com.example.shieldshare.managers.vpn.VpnManager
 import com.example.shieldshare.managers.vpn.VpnStatus
+import kotlinx.coroutines.*
+import java.io.BufferedInputStream
+import java.io.InputStream
+import java.io.PushbackInputStream
+import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
-import kotlinx.coroutines.*
+import com.example.shieldshare.managers.vpn.vpnAwareSocketFactory
+import com.example.shieldshare.managers.vpn.isVpnConnected
 
 /** Main proxy server implementation handling HTTP/HTTPS and SOCKS5 protocols */
 class ProxyServerImpl(
@@ -22,11 +29,35 @@ class ProxyServerImpl(
         private const val TAG = "ProxyServerImpl"
     }
 
-    private var serverSocket: ServerSocket? = null
+    private var httpServerSocket: ServerSocket? = null
+    private var socksServerSocket: ServerSocket? = null
     private var webServerSocket: ServerSocket? = null
     private val proxyHandlers = ConcurrentHashMap<String, ProxyHandler>()
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val clientDetectionScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var currentInstance: ProxyInstance? = null
+
+    private fun createServerSocket(port: Int, hotspotIp: String?): ServerSocket {
+        val bindAddress =
+                if (hotspotIp != null) {
+                    InetSocketAddress(hotspotIp, port)
+                } else {
+                    InetSocketAddress("0.0.0.0", port)
+                }
+        return ServerSocket().apply {
+            reuseAddress = true
+            soTimeout = 30000
+            bind(bindAddress)
+        }
+    }
+
+    private fun closeServer(socket: ServerSocket?) {
+        try {
+            socket?.close()
+        } catch (t: Throwable) {
+            Log.w(TAG, "Error closing server socket", t)
+        }
+    }
 
     // Track unique client IPs for counting
     private val connectedClients = ConcurrentHashMap<String, Long>() // IP -> timestamp
@@ -35,23 +66,31 @@ class ProxyServerImpl(
     override suspend fun startProxy(config: ProxyConfig): Result<ProxyInstance> =
             withContext(Dispatchers.IO) {
                 try {
-                    if (serverSocket != null) {
+                    if (httpServerSocket != null || socksServerSocket != null) {
                         return@withContext Result.failure(Exception("Proxy server already running"))
                     }
 
-                    // Try binding to the specific hotspot interface
+                    if (!ProxyPortManager.validatePortConfiguration(config)) {
+                        Log.w(
+                                TAG,
+                                "Custom proxy ports detected; ShieldShare enforces dedicated defaults."
+                        )
+                    }
+
                     val hotspotIp = hotspotManager.getHotspotIpAddress()
-                    val bindAddress =
-                            if (hotspotIp != null) {
-                                java.net.InetSocketAddress(hotspotIp, config.port)
-                            } else {
-                                java.net.InetSocketAddress("0.0.0.0", config.port)
-                            }
-                    serverSocket =
-                            ServerSocket().apply {
-                                reuseAddress = true
-                                bind(bindAddress)
-                            }
+
+                    try {
+                        httpServerSocket = createServerSocket(config.httpPort, hotspotIp)
+                        socksServerSocket = createServerSocket(config.socks5Port, hotspotIp)
+                    } catch (bindError: Exception) {
+                        Log.e(TAG, "Failed to bind proxy sockets", bindError)
+                        closeServer(httpServerSocket)
+                        closeServer(socksServerSocket)
+                        httpServerSocket = null
+                        socksServerSocket = null
+                        return@withContext Result.failure(bindError)
+                    }
+
                     val instance =
                             ProxyInstance(
                                     instanceId = "proxy_${System.currentTimeMillis()}",
@@ -59,23 +98,38 @@ class ProxyServerImpl(
                             )
                     currentInstance = instance
 
-                    Log.i(TAG, "Starting proxy server on port ${config.port}")
+                    Log.i(
+                            TAG,
+                            "Proxy servers bound (HTTP/HTTPS ${config.httpPort}, SOCKS5 ${config.socks5Port})"
+                    )
 
-                    // Start accepting connections
                     serviceScope.launch {
-                        Log.d(TAG, "Starting connection acceptor coroutine")
-                        acceptConnections()
+                        httpServerSocket?.let { socket ->
+                            Log.d(
+                                    TAG,
+                                    "Starting HTTP/HTTPS acceptor coroutine on port ${socket.localPort}"
+                            )
+                            acceptConnections(socket, "HTTP/HTTPS")
+                        }
                     }
 
-                    // Start web server for auto-configuration
-                    serviceScope.launch { startWebServer(config.port) }
+                    serviceScope.launch {
+                        socksServerSocket?.let { socket ->
+                            Log.d(TAG, "Starting SOCKS5 acceptor coroutine on port ${socket.localPort}")
+                            acceptConnections(socket, "SOCKS5")
+                        }
+                    }
 
-                    // Start client cleanup coroutine
+                    serviceScope.launch { startWebServer(config) }
                     serviceScope.launch { startClientCleanup() }
+                    serviceScope.launch {
+                        Log.i(TAG, "Starting proactive client detection")
+                        startClientScanning()
+                    }
 
                     Result.success(instance)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to start proxy server", e)
+                    Log.e(TAG, "Failed to start proxy servers", e)
                     Result.failure(e)
                 }
             }
@@ -83,8 +137,10 @@ class ProxyServerImpl(
     override suspend fun stopProxy(): Result<Unit> =
             withContext(Dispatchers.IO) {
                 try {
-                    serverSocket?.close()
-                    serverSocket = null
+                    closeServer(httpServerSocket)
+                    closeServer(socksServerSocket)
+                    httpServerSocket = null
+                    socksServerSocket = null
 
                     webServerSocket?.close()
                     webServerSocket = null
@@ -109,22 +165,30 @@ class ProxyServerImpl(
 
     override fun getProxyInfo(): ProxyInfo {
         val instance = currentInstance
+        val clientCount = connectedClients.size
+        Log.d(TAG, "getProxyInfo() called - Connected clients count: $clientCount")
         return if (instance != null) {
             ProxyInfo(
-                    isRunning = serverSocket != null && !serverSocket!!.isClosed,
-                    port = instance.config.port,
+                    isRunning =
+                            (httpServerSocket?.isClosed == false) ||
+                                    (socksServerSocket?.isClosed == false),
+                    httpPort = instance.config.httpPort,
+                    httpsPort = instance.config.httpsPort,
+                    socks5Port = instance.config.socks5Port,
                     proxyType = instance.config.proxyType,
-                    activeConnections = connectedClients.size, // Use unique client count
+                    activeConnections = clientCount, // Use unique client count
                     pacFileUrl =
                             hotspotManager.getHotspotIpAddress()?.let { hotspotIp ->
-                                "http://$hotspotIp:${instance.config.port}/proxy.pac"
+                                "http://$hotspotIp:${ProxyPortManager.CONFIG_PORT}/proxy.pac"
                             }
                                     ?: "Not available"
             )
         } else {
             ProxyInfo(
                     isRunning = false,
-                    port = 0,
+                    httpPort = ProxyPortManager.HTTP_PORT,
+                    httpsPort = ProxyPortManager.HTTPS_PORT,
+                    socks5Port = ProxyPortManager.SOCKS5_PORT,
                     proxyType = ProxyType.BOTH,
                     activeConnections = 0
             )
@@ -134,51 +198,108 @@ class ProxyServerImpl(
     override fun handleClientConnection(socket: Socket) {
         val clientId = "${socket.remoteSocketAddress}_${System.currentTimeMillis()}"
 
-        // Track unique client IP for counting
-        val clientIp = socket.remoteSocketAddress.toString().substringBefore(':')
-        connectedClients[clientIp] = System.currentTimeMillis()
-        Log.d(TAG, "Tracking client IP: $clientIp (Total unique clients: ${connectedClients.size})")
+        // Validate socket connection to prevent crashes
+        if (socket.isClosed || !socket.isConnected) {
+            Log.w(TAG, "Invalid socket connection, closing")
+            try {
+                socket.close()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error closing invalid socket", e)
+            }
+            return
+        }
 
-        // Create appropriate handler based on proxy type
-        val handler =
-                when (currentInstance?.config?.proxyType) {
-                    ProxyType.HTTP_HTTPS ->
-                            HttpProxyHandler(socket, trafficMeter) { bytesUp, bytesDown ->
-                                // TODO: JIALU - Traffic metering integration point
-                                // Record traffic through traffic meter
-                                trafficMeter.recordTraffic(
-                                        socket.remoteSocketAddress.toString(),
-                                        bytesUp,
-                                        bytesDown
-                                )
-                                proxyHandlers.remove(clientId)
-                            }
-                    ProxyType.SOCKS5 ->
-                            Socks5ProxyHandler(socket, trafficMeter) { bytesUp, bytesDown ->
-                                // TODO: JIALU - Traffic metering integration point
-                                // Record traffic through traffic meter
-                                trafficMeter.recordTraffic(
-                                        socket.remoteSocketAddress.toString(),
-                                        bytesUp,
-                                        bytesDown
-                                )
-                                proxyHandlers.remove(clientId)
-                            }
-                    ProxyType.BOTH -> {
-                        // For BOTH type, we need to detect the protocol from the first bytes
-                        // For now, default to HTTP
-                        HttpProxyHandler(socket, trafficMeter) { bytesUp, bytesDown ->
-                            // TODO: JIALU - Traffic metering integration point
-                            trafficMeter.recordTraffic(
-                                    socket.remoteSocketAddress.toString(),
-                                    bytesUp,
-                                    bytesDown
-                            )
-                            proxyHandlers.remove(clientId)
-                        }
-                    }
-                    null -> return // No active instance
+        // Track unique client IP for counting - ENHANCED LOGGING
+        val clientIp =
+                socket.remoteSocketAddress.toString().substringAfter("/").substringBefore(':')
+        val isNewClient = !connectedClients.containsKey(clientIp)
+        connectedClients[clientIp] = System.currentTimeMillis()
+
+        if (isNewClient) {
+            Log.i(TAG, "NEW CLIENT connected via proxy: $clientIp (Total unique clients: ${connectedClients.size})")
+            // Try to get device name for new clients
+            serviceScope.launch {
+                val deviceName = tryGetDeviceName(clientIp)
+                if (deviceName != null && deviceName != clientIp) {
+                    Log.i(TAG, "Device name for new client $clientIp: $deviceName")
                 }
+            }
+        } else {
+            Log.d(
+                    TAG,
+                    "Existing client reconnected: $clientIp (Total unique clients: ${connectedClients.size})"
+            )
+        }
+
+        // Strict mode: ensure all outbound sockets go via VPN; if not connected, reject early
+        // to avoid Traffic leakage
+        val strictVpn = true
+
+        // If BOTH, detect protocol and create handler with inOverride
+        val (ptype, inOverride) = when (currentInstance?.config?.proxyType) {
+            ProxyType.BOTH -> detectProtocolAndWrap(socket)
+            ProxyType.HTTP_HTTPS -> ProxyType.HTTP_HTTPS to null
+            ProxyType.SOCKS5 -> ProxyType.SOCKS5 to null
+            else -> return
+        }
+
+        // If strict and no VPN, send appropriate error reply and close
+        if (strictVpn && !context.isVpnConnected()) {
+            Log.w(TAG, "VPN not connected; rejecting client $clientIp for protocol $ptype")
+            try {
+                when (ptype) {
+                    ProxyType.SOCKS5 -> sendSocks5GeneralFailure(socket)
+                    else -> sendHttp502(socket)
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "Failed to send rejection response", t)
+            } finally {
+                safeClose(socket)
+            }
+            return
+        }
+
+        // Obtain VPN-aware SocketFactory (if not VPN, will fall back to default unless strict=true)
+        val socketFactory = context.vpnAwareSocketFactory(strict = strictVpn)
+
+        // Create appropriate handler
+        val handler: ProxyHandler = when (ptype) {
+            ProxyType.HTTP_HTTPS ->
+                HttpProxyHandler(
+                    clientSocket = socket,
+                    trafficMeter = trafficMeter,
+                    socketFactory = socketFactory,
+                    inOverride = inOverride
+                ) { bytesUp, bytesDown ->
+                    trafficMeter.recordTraffic(
+                        socket.remoteSocketAddress.toString(),
+                        bytesUp,
+                        bytesDown
+                    )
+                    proxyHandlers.remove(clientId)
+                }
+
+            ProxyType.SOCKS5 ->
+                Socks5ProxyHandler(
+                    clientSocket = socket,
+                    trafficMeter = trafficMeter,
+                    socketFactory = socketFactory,
+                    inOverride = inOverride
+                ) { bytesUp, bytesDown ->
+                    trafficMeter.recordTraffic(
+                        socket.remoteSocketAddress.toString(),
+                        bytesUp,
+                        bytesDown
+                    )
+                    proxyHandlers.remove(clientId)
+                }
+
+            else -> {
+                // Should not happen
+                safeClose(socket)
+                return
+            }
+        }
 
         proxyHandlers[clientId] = handler
 
@@ -189,99 +310,72 @@ class ProxyServerImpl(
             } catch (e: Exception) {
                 Log.e(TAG, "Error handling client connection", e)
                 proxyHandlers.remove(clientId)
+                safeClose(socket)
             }
         }
     }
 
-    private suspend fun acceptConnections() =
-            withContext(Dispatchers.IO) {
-                val socket = serverSocket
-                if (socket == null) {
-                    Log.e(TAG, "Server socket is null, cannot accept connections")
-                    return@withContext
-                }
+    private suspend fun acceptConnections(
+            serverSocket: ServerSocket,
+            protocolLabel: String
+    ) = withContext(Dispatchers.IO) {
+        Log.d(
+                TAG,
+                "$protocolLabel acceptor started, waiting for connections on port ${serverSocket.localPort}"
+        )
 
+        while (isActive && !serverSocket.isClosed) {
+            try {
+                val clientSocket = serverSocket.accept()
                 Log.d(
                         TAG,
-                        "Connection acceptor started, waiting for connections on port ${socket.localPort}"
+                        "[$protocolLabel] New client connection: ${clientSocket.remoteSocketAddress}"
                 )
-
-                while (isActive && !socket.isClosed) {
-                    try {
-                        Log.d(TAG, "Waiting for client connection...")
-                        val clientSocket = socket.accept()
-                        Log.d(TAG, "New client connection: ${clientSocket.remoteSocketAddress}")
-                        handleClientConnection(clientSocket)
-                    } catch (e: Exception) {
-                        if (!socket.isClosed) {
-                            Log.e(TAG, "Error accepting connection", e)
-                        }
-                    }
+                handleClientConnection(clientSocket)
+            } catch (e: Exception) {
+                if (!serverSocket.isClosed) {
+                    Log.e(TAG, "Error accepting $protocolLabel connection", e)
                 }
-                Log.d(TAG, "Connection acceptor stopped")
             }
+        }
+        Log.d(TAG, "$protocolLabel acceptor stopped")
+    }
 
     /**
-     * VPN Integration Point for Hanchen
+     * （KEEP）VPN Integration Point for Hanchen
      *
-     * HANCHEN: This method is called by the proxy handlers to forward data through VPN. You need to
-     * implement the actual VPN forwarding logic here.
-     *
-     * Current behavior: Just checks VPN status (placeholder) Expected behavior: Forward data
-     * through your VPN tunnel
-     *
-     * @param data The data to forward through VPN tunnel
+     * Note: Under the current approach of using the system-level third-party VPN,
+     * there is no need to “write into a VPN tunnel” here.
+     * All outbound sockets are already bound to the VPN via activeNetwork.socketFactory.
+     * This method is only for logging and policy control.
      */
     private suspend fun forwardThroughVpn(data: ByteArray) {
-        // TODO: HANCHEN - Implement actual VPN forwarding
-        //
-        // Steps you need to implement:
-        // 1. Check if VPN is connected: vpnManager.getConnectionStatus()
-        // 2. If connected, forward data through VPN tunnel
-        // 3. If not connected, handle appropriately (block, queue, or allow)
-        //
-        // Example integration:
-        // when (vpnManager.getConnectionStatus()) {
-        //     VpnStatus.CONNECTED -> {
-        //         // Forward through VPN tunnel
-        //         vpnManager.forwardData(data)
-        //     }
-        //     else -> {
-        //         // Handle disconnected state
-        //         Log.w(TAG, "VPN not connected, blocking traffic")
-        //     }
-        // }
-
         val vpnStatus = vpnManager.getConnectionStatus()
         Log.d(TAG, "VPN Status = $vpnStatus")
-
-        // Basic forwarding implementation
         when (vpnStatus) {
             VpnStatus.CONNECTED -> {
-                Log.d(TAG, "VPN connected, forwarding data through VPN tunnel")
-                // TODO: Implement actual VPN tunnel forwarding
-                // For now, we'll allow the traffic to pass through
-                // This is a placeholder - you need to implement the actual VPN forwarding
+                // Go through socketFactory to VPN，No extra work needed
+                Log.d(TAG, "VPN connected; outbound sockets are created via VPN Network.")
             }
             VpnStatus.DISCONNECTED -> {
-                Log.w(TAG, "VPN not connected, but allowing traffic to pass through")
-                // Allow traffic even without VPN
+                Log.w(TAG, "VPN not connected. (strict gating is enforced at connection time)")
             }
             else -> {
-                Log.w(TAG, "VPN status unknown: $vpnStatus, allowing traffic")
+                Log.w(TAG, "VPN status unknown: $vpnStatus")
             }
         }
     }
 
     /** Start web server for auto-configuration page */
-    private suspend fun startWebServer(proxyPort: Int) {
+    private suspend fun startWebServer(config: ProxyConfig) {
         try {
             val hotspotIp = hotspotManager.getHotspotIpAddress()
+            val portalPort = ProxyPortManager.CONFIG_PORT
             val bindAddress =
                     if (hotspotIp != null) {
-                        java.net.InetSocketAddress(hotspotIp, proxyPort + 1)
+                        java.net.InetSocketAddress(hotspotIp, portalPort)
                     } else {
-                        java.net.InetSocketAddress("0.0.0.0", proxyPort + 1)
+                        java.net.InetSocketAddress("0.0.0.0", portalPort)
                     }
 
             webServerSocket =
@@ -290,13 +384,13 @@ class ProxyServerImpl(
                         bind(bindAddress)
                     }
 
-            Log.i(TAG, "Web server started on port ${proxyPort + 1}")
+            Log.i(TAG, "Web server started on port $portalPort")
 
             while (webServerSocket?.isClosed == false) {
                 try {
                     val clientSocket = webServerSocket?.accept()
                     if (clientSocket != null) {
-                        serviceScope.launch { handleWebRequest(clientSocket, proxyPort) }
+                        serviceScope.launch { handleWebRequest(clientSocket, config) }
                     }
                 } catch (e: Exception) {
                     if (webServerSocket?.isClosed == false) {
@@ -310,7 +404,7 @@ class ProxyServerImpl(
     }
 
     /** Handle web requests for auto-configuration */
-    private suspend fun handleWebRequest(socket: Socket, proxyPort: Int) {
+    private suspend fun handleWebRequest(socket: Socket, config: ProxyConfig) {
         try {
             val input = socket.getInputStream()
             val output = socket.getOutputStream()
@@ -320,7 +414,7 @@ class ProxyServerImpl(
 
             val hotspotIp = hotspotManager.getHotspotIpAddress() ?: "192.168.43.1"
 
-            val htmlContent = generateAutoConfigPage(hotspotIp, proxyPort)
+            val htmlContent = generateAutoConfigPage(hotspotIp, config)
             val contentBytes = htmlContent.toByteArray(Charsets.UTF_8)
 
             // Proper HTTP response format with \r\n line endings
@@ -342,7 +436,12 @@ class ProxyServerImpl(
     }
 
     /** Generate auto-configuration HTML page */
-    private fun generateAutoConfigPage(hotspotIp: String, proxyPort: Int): String {
+    private fun generateAutoConfigPage(hotspotIp: String, config: ProxyConfig): String {
+        val httpPort = config.httpPort
+        val httpsPort = config.httpsPort
+        val socksPort = config.socks5Port
+        val portalPort = ProxyPortManager.CONFIG_PORT
+        val pacUrl = "http://$hotspotIp:$portalPort/proxy.pac"
         return """
 <!DOCTYPE html>
 <html lang="en">
@@ -372,8 +471,8 @@ class ProxyServerImpl(
         </div>
         
         <div class="info">
-            <strong>Proxy Server:</strong> $hotspotIp:$proxyPort<br>
-            <strong>PAC URL:</strong> http://$hotspotIp:$proxyPort/proxy.pac
+            <strong>Gateway:</strong> $hotspotIp<br>
+            <strong>PAC URL:</strong> $pacUrl
         </div>
         
         <div class="config-section">
@@ -384,29 +483,18 @@ class ProxyServerImpl(
         </div>
         
         <div class="manual-config">
-            <h3>Manual Configuration</h3>
-            <p><strong>For Android:</strong></p>
-            <ol>
-                <li>Go to Settings → Wi-Fi</li>
-                <li>Long press your connected network</li>
-                <li>Modify → Advanced → Proxy → Manual</li>
-                <li>Server: <span class="mini-code">$hotspotIp</span></li>
-                <li>Port: <span class="mini-code">$proxyPort</span></li>
-            </ol>
-            
-            <p><strong>For iOS:</strong></p>
-            <ol>
-                <li>Settings → Wi-Fi → (i) icon</li>
-                <li>Configure Proxy → Manual</li>
-                <li>Server: <span class="mini-code">$hotspotIp</span></li>
-                <li>Port: <span class="mini-code">$proxyPort</span></li>
-            </ol>
+            <h3>Manual Proxy Settings</h3>
+            <p>Configure the following on your client device:</p>
+            <ul>
+                <li>HTTP/HTTPS Proxy: <span class="mini-code">$hotspotIp:$httpPort</span></li>
+                <li>SOCKS5 Proxy: <span class="mini-code">$hotspotIp:$socksPort</span></li>
+            </ul>
         </div>
         
         <div class="config-section">
             <h3>PAC Auto-Configuration</h3>
             <p>Use PAC file for automatic proxy routing:</p>
-            <div class="code">http://$hotspotIp:$proxyPort/proxy.pac</div>
+            <div class="code">$pacUrl</div>
             <p><small>Copy this URL to your device's Proxy Auto-Configuration settings</small></p>
         </div>
     </div>
@@ -415,16 +503,16 @@ class ProxyServerImpl(
         function autoConfigure() {
             // Try to open system proxy settings
             if (navigator.userAgent.includes('Android')) {
-                alert('Please manually configure proxy in Android Wi-Fi settings:\\n\\nServer: $hotspotIp\\nPort: $proxyPort');
+                alert('Please manually configure proxy in Android Wi-Fi settings:\\n\\nHTTP/HTTPS: $hotspotIp:$httpPort\\nSOCKS5: $hotspotIp:$socksPort');
             } else if (navigator.userAgent.includes('iPhone') || navigator.userAgent.includes('iPad')) {
-                alert('Please manually configure proxy in iOS Wi-Fi settings:\\n\\nServer: $hotspotIp\\nPort: $proxyPort');
+                alert('Please manually configure proxy in iOS Wi-Fi settings:\\n\\nHTTP/HTTPS: $hotspotIp:$httpPort\\nSOCKS5: $hotspotIp:$socksPort');
             } else {
                 alert('Auto-configuration not supported on this device.\\nPlease use manual configuration.');
             }
         }
         
         function downloadPAC() {
-            window.open('http://$hotspotIp:$proxyPort/proxy.pac', '_blank');
+            window.open('$pacUrl', '_blank');
         }
         
         // Auto-detect device type and show appropriate instructions
@@ -466,4 +554,147 @@ class ProxyServerImpl(
             }
         }
     }
+
+    /** ENHANCEMENT: Proactive client detection through subnet scanning */
+    private suspend fun startClientScanning() {
+        coroutineScope {
+            while (isActive) {
+                try {
+                    Log.i(TAG, "Running client scan...")
+                    scanForConnectedDevices()
+                    delay(15_000) // Scan every 15 seconds
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error in client scanning", e)
+                    delay(30_000) // Wait longer on error
+                }
+            }
+        }
+    }
+
+    /** Scan hotspot subnet for connected devices */
+    private suspend fun scanForConnectedDevices() {
+        val hotspotIp = hotspotManager.getHotspotIpAddress()
+        if (hotspotIp == null) {
+            Log.d(TAG, "No hotspot IP available for scanning")
+            return
+        }
+
+        val subnet = hotspotIp.substringBeforeLast(".")
+        Log.i(TAG, "Scanning subnet: $subnet.x for connected devices")
+
+        // sacn client address
+        val scanJobs = (2..10).map { i ->
+            clientDetectionScope.async {
+                val targetIp = "$subnet.$i"
+                Log.d(TAG, "Pinging $targetIp...")
+                if (pingDevice(targetIp)) {
+                    Log.i(TAG, "Ping successful for $targetIp!")
+                    // record new devices
+                    if (!connectedClients.containsKey(targetIp)) {
+                        connectedClients[targetIp] = System.currentTimeMillis()
+                        Log.i(TAG, "Discovered new device via ping: $targetIp (Total clients: ${connectedClients.size})")
+                    }
+                    //
+                    clientDetectionScope.launch {
+                        val deviceName = tryGetDeviceName(targetIp)
+                        if (deviceName != null && deviceName != targetIp) {
+                            Log.i(TAG, "Device name for $targetIp: $deviceName")
+                        }
+                    }
+                } else {
+                    Log.d(TAG, "No response from $targetIp")
+                }
+            }
+        }
+
+        // waiting ping
+        withTimeoutOrNull(3000) {
+            scanJobs.awaitAll()
+        }
+
+        Log.i(TAG, "Scan completed. Total connected clients: ${connectedClients.size}")
+        if (connectedClients.isNotEmpty()) {
+            Log.i(TAG, "Connected client IPs: ${connectedClients.keys.joinToString(", ")}")
+        }
+    }
+
+    /** Fast ping check for device availability */
+    private suspend fun pingDevice(ip: String): Boolean =
+            withTimeoutOrNull(800) {
+                try {
+                    val address = InetAddress.getByName(ip)
+                    address.isReachable(500) // 500ms timeout per ping
+                } catch (e: Exception) {
+                    false
+                }
+            }
+                    ?: false
+
+    /** Try to get device name via reverse DNS lookup */
+    private suspend fun tryGetDeviceName(ip: String): String? = withTimeoutOrNull(1000) {
+        try {
+            InetAddress.getByName(ip).hostName.takeIf { it != ip }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Inspect the first bytes: detect SOCKS5 (0x05) or HTTP method/CONNECT;
+     *  return the detected protocol and a replayable (pushback) InputStream. */
+    private fun detectProtocolAndWrap(socket: Socket): Pair<ProxyType, InputStream?> {
+        return try {
+            val pb = PushbackInputStream(BufferedInputStream(socket.getInputStream()), 32)
+            val peek = ByteArray(32)
+            val n = pb.read(peek)
+            if (n > 0) pb.unread(peek, 0, n)
+
+            val first = if (n > 0) peek[0].toInt() and 0xFF else -1
+            val head = if (n > 0) String(peek, 0, n, Charsets.US_ASCII).uppercase() else ""
+
+            val isHttp = head.startsWith("CONNECT") || head.startsWith("GET") ||
+                    head.startsWith("POST") || head.startsWith("HEAD") ||
+                    head.startsWith("PUT") || head.startsWith("DELETE") ||
+                    head.startsWith("OPTIONS") || head.startsWith("TRACE") ||
+                    head.startsWith("PATCH")
+
+            when {
+                first == 0x05 -> ProxyType.SOCKS5 to pb
+                isHttp -> ProxyType.HTTP_HTTPS to pb
+                else -> ProxyType.HTTP_HTTPS to pb // 兜底
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Protocol detection failed, defaulting to HTTP: ${t.message}")
+            ProxyType.HTTP_HTTPS to null
+        }
+    }
+
+    /** In strict mode, reject HTTP: send 502 Bad Gateway and close the connection. */
+    private fun sendHttp502(socket: Socket) {
+        try {
+            val msg = "HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+            socket.getOutputStream().write(msg.toByteArray(Charsets.US_ASCII))
+            socket.getOutputStream().flush()
+        } catch (_: Throwable) {
+        }
+    }
+
+    /** In strict mode, reject SOCKS5: return GENERAL_FAILURE
+     *  (VER=0x05, REP=0x01, RSV=0x00, ATYP=0x01, addr=0.0.0.0, port=0) and close. */
+    private fun sendSocks5GeneralFailure(socket: Socket) {
+        try {
+            val out = socket.getOutputStream()
+            out.write(byteArrayOf(
+                0x05, // VER
+                0x01, // REP = general failure
+                0x00, // RSV
+                0x01, // ATYP = IPv4
+                0x00, 0x00, 0x00, 0x00, // BND.ADDR = 0.0.0.0
+                0x00, 0x00 // BND.PORT = 0
+            ))
+            out.flush()
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun safeClose(s: Socket?) = try { s?.close() } catch (_: Throwable) {}
 }

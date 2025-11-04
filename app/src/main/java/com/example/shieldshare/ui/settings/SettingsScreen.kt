@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.shieldshare.managers.proxy.ProxyPortManager
 
 @Composable
 fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
@@ -24,58 +25,6 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
                             .safeDrawingPadding(),
             verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        item {
-            Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors =
-                            CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.surface
-                            ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-                    shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(
-                            text = "VPN Settings",
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.SemiBold
-                    )
-
-                    Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        OutlinedTextField(
-                                value = uiState.vpnServerAddress,
-                                onValueChange = viewModel::updateVpnServerAddress,
-                                label = { Text("VPN IP Address") },
-                                modifier = Modifier.weight(1f)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Button(onClick = { viewModel.refreshVpnIp() }) {
-                            Text("Refresh")
-                        }
-                    }
-
-                    OutlinedTextField(
-                            value = uiState.vpnUsername,
-                            onValueChange = viewModel::updateVpnUsername,
-                            label = { Text("Username") },
-                            modifier = Modifier.fillMaxWidth()
-                    )
-
-                    OutlinedTextField(
-                            value = uiState.vpnPassword,
-                            onValueChange = viewModel::updateVpnPassword,
-                            label = { Text("Password") },
-                            modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            }
-        }
 
         item {
             Card(
@@ -97,11 +46,11 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
                             fontWeight = FontWeight.SemiBold
                     )
 
-                    OutlinedTextField(
-                            value = uiState.proxyPort.toString(),
-                            onValueChange = { viewModel.updateProxyPort(it.toIntOrNull() ?: 8080) },
-                            label = { Text("Port") },
-                            modifier = Modifier.fillMaxWidth()
+                    Text(
+                            text =
+                                    "HTTP/HTTPS ${ProxyPortManager.HTTP_PORT}, SOCKS5 ${ProxyPortManager.SOCKS5_PORT}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
                     Row(
