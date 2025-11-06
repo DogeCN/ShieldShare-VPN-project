@@ -5,7 +5,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Security
@@ -97,7 +99,7 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
                                 Spacer(modifier = Modifier.height(6.dp))
 
                                 Text(
-                                        text = "ShieldShare VPN",
+                                        text = "ShieldShare",
                                         style = MaterialTheme.typography.headlineMedium,
                                         fontWeight = FontWeight.ExtraBold,
                                         textAlign = TextAlign.Center,
@@ -106,7 +108,7 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
                                 )
 
                                 Text(
-                                        text = "Shareable • Fast • Private",
+                                        text = "VPN-backed Hotspot Sharing",
                                         style = MaterialTheme.typography.bodyMedium,
                                         textAlign = TextAlign.Center,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -587,7 +589,7 @@ fun QrCodeDialog(onDismiss: () -> Unit, viewModel: HomeViewModel, uiState: HomeU
                                         shape = RoundedCornerShape(8.dp)
                                 ) {
                                         Column(
-                                                modifier = Modifier.padding(12.dp),
+                                                modifier = Modifier.padding(12.dp).verticalScroll(rememberScrollState()),
                                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
                                                 Text(
