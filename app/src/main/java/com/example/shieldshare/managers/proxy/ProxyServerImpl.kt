@@ -1,6 +1,9 @@
 package com.example.shieldshare.managers.proxy
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.util.Log
 import com.example.shieldshare.managers.hotspot.HotspotManager
 import com.example.shieldshare.managers.meter.TrafficMeter
@@ -307,6 +310,21 @@ class ProxyServerImpl(
 
         // Obtain VPN-aware SocketFactory (if not VPN, will fall back to default unless strict=true)
         val socketFactory = context.vpnAwareSocketFactory(strict = strictVpn)
+        
+        // Get VPN Network object for DNS resolution
+        val vpnNetwork = try {
+            val cm = context.getSystemService(ConnectivityManager::class.java)
+            val net = cm.activeNetwork
+            val caps = net?.let { cm.getNetworkCapabilities(it) }
+            if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true) {
+                net
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to get VPN network: ${e.message}")
+            null
+        }
 
         // Create appropriate handler
         val handler: ProxyHandler = when (ptype) {
@@ -315,6 +333,7 @@ class ProxyServerImpl(
                     clientSocket = socket,
                     trafficMeter = trafficMeter,
                     socketFactory = socketFactory,
+                    vpnNetwork = vpnNetwork,
                     inOverride = inOverride
                 ) { bytesUp, bytesDown ->
                     trafficMeter.recordTraffic(
@@ -330,6 +349,7 @@ class ProxyServerImpl(
                     clientSocket = socket,
                     trafficMeter = trafficMeter,
                     socketFactory = socketFactory,
+                    vpnNetwork = vpnNetwork,
                     inOverride = inOverride
                 ) { bytesUp, bytesDown ->
                     trafficMeter.recordTraffic(

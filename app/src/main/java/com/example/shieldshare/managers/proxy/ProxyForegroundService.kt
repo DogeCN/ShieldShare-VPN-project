@@ -4,6 +4,9 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
@@ -17,9 +20,6 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.*
 import com.example.shieldshare.managers.vpn.vpnAwareSocketFactory
 import javax.net.SocketFactory
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
-import java.net.URLDecoder
 
 class ProxyForegroundService : Service() {
     companion object {
@@ -180,11 +180,27 @@ class ProxyForegroundService : Service() {
 
                         val sf: SocketFactory = applicationContext.vpnAwareSocketFactory(strict = true)
 
+                        // Get VPN Network object for DNS resolution
+                        val vpnNetwork = try {
+                            val cm = applicationContext.getSystemService(ConnectivityManager::class.java)
+                            val net = cm.activeNetwork
+                            val caps = net?.let { cm.getNetworkCapabilities(it) }
+                            if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true) {
+                                net
+                            } else {
+                                null
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to get VPN network: ${e.message}")
+                            null
+                        }
+
                         val handler: ProxyHandler =
                             HttpProxyHandler(
                                 clientSocket = clientSocket,
                                 trafficMeter = trafficMeter,
                                 socketFactory = sf,
+                                vpnNetwork = vpnNetwork,
                                 inOverride = pb
                             ) { bytesUp, bytesDown ->
                                 Log.d(TAG, "HTTP proxy traffic: up=$bytesUp, down=$bytesDown")
@@ -220,11 +236,27 @@ class ProxyForegroundService : Service() {
                     // 为 SOCKS5 分支补齐 socketFactory
                     val sf: SocketFactory = applicationContext.vpnAwareSocketFactory(strict = true)
 
+                    // Get VPN Network object for DNS resolution
+                    val vpnNetwork = try {
+                        val cm = applicationContext.getSystemService(ConnectivityManager::class.java)
+                        val net = cm.activeNetwork
+                        val caps = net?.let { cm.getNetworkCapabilities(it) }
+                        if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true) {
+                            net
+                        } else {
+                            null
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to get VPN network: ${e.message}")
+                        null
+                    }
+
                     val handler: ProxyHandler =
                         Socks5ProxyHandler(
                             clientSocket = clientSocket,
                             trafficMeter = trafficMeter,
-                            socketFactory = sf
+                            socketFactory = sf,
+                            vpnNetwork = vpnNetwork
                         ) { bytesUp, bytesDown ->
                             Log.d(TAG, "SOCKS5 proxy traffic: up=$bytesUp, down=$bytesDown")
                             activeConnections.decrementAndGet()

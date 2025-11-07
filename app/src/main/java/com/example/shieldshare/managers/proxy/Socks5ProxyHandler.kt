@@ -1,5 +1,6 @@
 package com.example.shieldshare.managers.proxy
 
+import android.net.Network
 import android.util.Log
 import com.example.shieldshare.managers.meter.TrafficMeter
 import java.io.*
@@ -13,6 +14,7 @@ class Socks5ProxyHandler(
         clientSocket: Socket,
         trafficMeter: TrafficMeter,
         private val socketFactory: SocketFactory,
+        private val vpnNetwork: Network? = null,
         private val inOverride: InputStream? = null,
         private val trafficCallback: (bytesUp: Long, bytesDown: Long) -> Unit = { _, _ -> }
 ) : ProxyHandler(clientSocket, trafficMeter) {
@@ -35,6 +37,11 @@ class Socks5ProxyHandler(
         private const val REPLY_TTL_EXPIRED = 0x06
         private const val REPLY_COMMAND_NOT_SUPPORTED = 0x07
         private const val REPLY_ADDRESS_TYPE_NOT_SUPPORTED = 0x08
+        
+        // DNS cache with TTL: hostname -> Pair(IP address, expiration timestamp)
+        private const val DNS_CACHE_TTL_MS = 5 * 60 * 1000L
+        private val dnsCache = mutableMapOf<String, Pair<InetAddress, Long>>()
+        private val dnsCacheLock = Any()
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -237,22 +244,126 @@ class Socks5ProxyHandler(
         output: OutputStream
     ): Socket? =
         withContext(Dispatchers.IO) {
+            val socket = socketFactory.createSocket()
+            var resolvedAddress: InetAddress? = null
+            
             try {
-                val targetSocket = socketFactory.createSocket()
-                targetSocket.connect(InetSocketAddress(host, port), 10000)
+                // Check DNS cache first (with TTL validation)
+                var cachedIp: InetAddress? = null
+                synchronized(dnsCacheLock) {
+                    val cached = dnsCache[host]
+                    if (cached != null) {
+                        val (ip, expirationTime) = cached
+                        if (System.currentTimeMillis() < expirationTime) {
+                            cachedIp = ip
+                            Log.d(TAG, "Using cached DNS for $host -> ${ip.hostAddress}")
+                        } else {
+                            dnsCache.remove(host)
+                            Log.d(TAG, "DNS cache expired for $host, will resolve fresh")
+                        }
+                    }
+                }
+                
+                // Resolve DNS using VPN network if available
+                resolvedAddress = if (cachedIp != null) {
+                    cachedIp
+                } else if (vpnNetwork != null) {
+                    // Use VPN network's DNS resolver
+                    try {
+                        Log.d(TAG, "Resolving DNS for $host via VPN network")
+                        val addresses = vpnNetwork.getAllByName(host)
+                        if (addresses.isNotEmpty()) {
+                            val ip = addresses[0]
+                            Log.d(TAG, "DNS resolved via VPN: $host -> ${ip.hostAddress}")
+                            
+                            // Cache the resolved IP with TTL
+                            synchronized(dnsCacheLock) {
+                                dnsCache[host] = Pair(ip, System.currentTimeMillis() + DNS_CACHE_TTL_MS)
+                            }
+                            ip
+                        } else {
+                            throw UnknownHostException("No addresses found for $host")
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "VPN DNS resolution failed for $host, falling back to socket DNS: ${e.message}")
+                        null
+                    }
+                } else {
+                    Log.d(TAG, "No VPN network available, using socket DNS for $host")
+                    null
+                }
+                
+                // Create socket address
+                val address = if (resolvedAddress != null) {
+                    InetSocketAddress(resolvedAddress, port)
+                } else {
+                    InetSocketAddress(host, port)
+                }
+                
+                // Optimized connection timeout: 10 seconds
+                socket.connect(address, 10_000)
+                
+                // Cache the final resolved IP if we didn't cache it already
+                val connectedAddress = socket.remoteSocketAddress as? InetSocketAddress
+                if (connectedAddress != null && resolvedAddress == null) {
+                    synchronized(dnsCacheLock) {
+                        dnsCache[host] = Pair(connectedAddress.address, System.currentTimeMillis() + DNS_CACHE_TTL_MS)
+                        Log.d(TAG, "Cached DNS resolution from socket: $host -> ${connectedAddress.address.hostAddress}")
+                    }
+                }
+                
+                socket.soTimeout = 30_000
+                socket.tcpNoDelay = true
+                socket.keepAlive = true
 
                 // Send success reply
                 sendConnectionReply(
                     output,
                     REPLY_SUCCESS,
-                    targetSocket.localAddress,
-                    targetSocket.localPort
+                    socket.localAddress,
+                    socket.localPort
                 )
 
-                targetSocket
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to connect to target: $host:$port", e)
+                socket
+            } catch (e: UnknownHostException) {
+                synchronized(dnsCacheLock) {
+                    dnsCache.remove(host)
+                }
+                Log.e(TAG, "DNS resolution failed for $host:$port - ${e.message}", e)
+                try {
+                    socket.close()
+                } catch (_: Exception) {}
+                sendConnectionReply(output, REPLY_HOST_UNREACHABLE)
+                null
+            } catch (e: SocketTimeoutException) {
+                synchronized(dnsCacheLock) {
+                    dnsCache.remove(host)
+                }
+                Log.e(TAG, "Connection timeout to $host:$port - ${e.message}", e)
+                try {
+                    socket.close()
+                } catch (_: Exception) {}
+                sendConnectionReply(output, REPLY_NETWORK_UNREACHABLE)
+                null
+            } catch (e: ConnectException) {
+                synchronized(dnsCacheLock) {
+                    dnsCache.remove(host)
+                }
+                Log.e(TAG, "Connection refused to $host:$port - ${e.message}", e)
+                try {
+                    socket.close()
+                } catch (_: Exception) {}
                 sendConnectionReply(output, REPLY_CONNECTION_REFUSED)
+                null
+            } catch (e: Exception) {
+                synchronized(dnsCacheLock) {
+                    dnsCache.remove(host)
+                }
+                Log.e(TAG, "Failed to connect to target: $host:$port - ${e.javaClass.simpleName}: ${e.message}", e)
+                try {
+                    socket.close()
+                } catch (_: Exception) {}
+                sendConnectionReply(output, REPLY_GENERAL_FAILURE)
                 null
             }
         }

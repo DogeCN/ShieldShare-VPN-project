@@ -1,5 +1,8 @@
 package com.example.shieldshare.managers.proxy
 
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
 import android.util.Log
 import com.example.shieldshare.managers.meter.TrafficMeter
 import com.example.shieldshare.managers.meter.TrafficMeterSimple
@@ -21,6 +24,7 @@ class HttpProxyHandler(
         clientSocket: Socket,
         trafficMeter: TrafficMeter,
         private val socketFactory: SocketFactory,
+        private val vpnNetwork: Network? = null,
         private val inOverride: InputStream? = null,
         private val trafficCallback: (bytesUp: Long, bytesDown: Long) -> Unit = { _, _ -> }
 ) : ProxyHandler(clientSocket, trafficMeter) {
@@ -29,6 +33,12 @@ class HttpProxyHandler(
         private const val BUFFER_SIZE = 8192
         private const val CONNECT_METHOD = "CONNECT"
         private const val HTTP_VERSION = "HTTP/1.1"
+        
+        // DNS cache with TTL: hostname -> Pair(IP address, expiration timestamp)
+        // TTL: 5 minutes to prevent stale IPs while still benefiting from caching
+        private const val DNS_CACHE_TTL_MS = 5 * 60 * 1000L
+        private val dnsCache = mutableMapOf<String, Pair<InetAddress, Long>>()
+        private val dnsCacheLock = Any()
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -71,35 +81,53 @@ class HttpProxyHandler(
                     return@launch
                 }
                 handleRequest()
+            } catch (e: SocketTimeoutException) {
+                Log.w(TAG, "Connection timeout in handleConnectionInternal: ${e.message}")
+            } catch (e: SocketException) {
+                Log.w(TAG, "Socket error in connection handling: ${e.message}")
+            } catch (e: IOException) {
+                Log.w(TAG, "IO error in connection handling: ${e.message}")
             } catch (e: Exception) {
-                Log.e(TAG, "Error in connection handling", e)
+                Log.e(TAG, "Unexpected error in connection handling: ${e.message}", e)
+            } finally {
+                cleanup()
             }
         }
     }
 
     private suspend fun handleRequest() = withContext(Dispatchers.IO) {
-        val clientIn = inOverride ?: socket.getInputStream()
-        val clientOut = socket.getOutputStream()
-        val reader = BufferedReader(InputStreamReader(clientIn, Charsets.US_ASCII))
-        val writer = PrintWriter(OutputStreamWriter(clientOut, Charsets.US_ASCII), true)
+        try {
+            val clientIn = inOverride ?: socket.getInputStream()
+            val clientOut = socket.getOutputStream()
+            val reader = BufferedReader(InputStreamReader(clientIn, Charsets.US_ASCII))
+            val writer = PrintWriter(OutputStreamWriter(clientOut, Charsets.US_ASCII), true)
 
-        // Read the first request line
-        val requestLine = reader.readLine() ?: return@withContext
-        Log.d(TAG, "Proxy request: $requestLine")
+            // Read the first request line
+            val requestLine = reader.readLine() ?: return@withContext
+            Log.d(TAG, "Proxy request: $requestLine")
 
-        val parts = requestLine.split(" ")
-        if (parts.size < 3) {
-            sendErrorResponse(writer, 400, "Bad Request")
-            return@withContext
-        }
+            val parts = requestLine.split(" ")
+            if (parts.size < 3) {
+                sendErrorResponse(writer, 400, "Bad Request")
+                return@withContext
+            }
 
-        val method = parts[0]
-        val url = parts[1]
+            val method = parts[0]
+            val url = parts[1]
 
-        if (method.equals(CONNECT_METHOD, ignoreCase = true)) {
-            handleConnectRequest(reader, writer, url)
-        } else {
-            handleHttpRequest(reader, writer, method, url)
+            if (method.equals(CONNECT_METHOD, ignoreCase = true)) {
+                handleConnectRequest(reader, writer, url)
+            } else {
+                handleHttpRequest(reader, writer, method, url)
+            }
+        } catch (e: SocketTimeoutException) {
+            Log.w(TAG, "Request timeout: ${e.message}")
+        } catch (e: SocketException) {
+            Log.w(TAG, "Socket error in handleRequest: ${e.message}")
+        } catch (e: IOException) {
+            Log.w(TAG, "IO error in handleRequest: ${e.message}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Unexpected error in handleRequest: ${e.message}", e)
         }
     }
 
@@ -119,16 +147,55 @@ class HttpProxyHandler(
 
         // Track target host for session
         hostsAccessed.add(host)
-        // (trafficMeter as? TrafficMeterSimple)?.updateSessionTarget(sessionId, host) // 如果你实现了的话
+
+        // Create target socket via VPN-bound factory BEFORE sending 200 response
+        val targetSocket = try {
+            Log.d(TAG, "Attempting to connect to $host:$port via VPN")
+            connectTarget(host, port)
+        } catch (e: UnknownHostException) {
+            Log.e(TAG, "DNS resolution failed for $host:$port - ${e.message}", e)
+            sendErrorResponse(writer, 502, "Bad Gateway - DNS resolution failed")
+            return@withContext
+        } catch (e: SocketTimeoutException) {
+            Log.e(TAG, "Connection timeout to $host:$port after 15s - ${e.message}", e)
+            sendErrorResponse(writer, 504, "Gateway Timeout - Connection timeout")
+            return@withContext
+        } catch (e: ConnectException) {
+            Log.e(TAG, "Connection refused to $host:$port - ${e.message}", e)
+            sendErrorResponse(writer, 502, "Bad Gateway - Connection refused")
+            return@withContext
+        } catch (e: IOException) {
+            Log.e(TAG, "IO error connecting to $host:$port - ${e.javaClass.simpleName}: ${e.message}", e)
+            sendErrorResponse(writer, 502, "Bad Gateway - Network error")
+            return@withContext
+        } catch (e: Exception) {
+            Log.e(TAG, "Unexpected error connecting to $host:$port - ${e.javaClass.simpleName}: ${e.message}", e)
+            sendErrorResponse(writer, 502, "Bad Gateway - Connection failed")
+            return@withContext
+        }
+
+        // Set longer timeouts for HTTPS tunnels (they can be long-lived)
+        try {
+            socket.soTimeout = 0 // No timeout on client socket for HTTPS tunnels
+            targetSocket.soTimeout = 0 // No timeout on target socket for HTTPS tunnels
+            socket.tcpNoDelay = true // Disable Nagle's algorithm for better latency
+            targetSocket.tcpNoDelay = true
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to configure socket options: ${e.message}")
+        }
 
         // 200 Established, then raw tunnel
-        writer.println("$HTTP_VERSION 200 Connection Established")
-        writer.println("Proxy-Agent: ShieldShare/1.0")
-        writer.println()
-        writer.flush()
+        try {
+            writer.println("$HTTP_VERSION 200 Connection Established")
+            writer.println("Proxy-Agent: ShieldShare/1.0")
+            writer.println()
+            writer.flush()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send 200 response to client", e)
+            safeClose(targetSocket)
+            return@withContext
+        }
 
-        // Create target socket via VPN-bound factory
-        val targetSocket = connectTarget(host, port)
         try {
             val t1 = scope.launch {
                 // client -> target (upload)
@@ -148,8 +215,7 @@ class HttpProxyHandler(
             }
             joinAll(t1, t2)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed CONNECT to $host:$port", e)
-            // If the connection is failed
+            Log.e(TAG, "Failed CONNECT tunnel to $host:$port: ${e.message}", e)
         } finally {
             safeClose(targetSocket)
         }
@@ -208,7 +274,31 @@ class HttpProxyHandler(
         val preface = sb.toString().toByteArray(Charsets.US_ASCII)
 
         // Forward to target via VPN-bound socket
-        val targetSocket = connectTarget(host, port)
+        val targetSocket = try {
+            Log.d(TAG, "Attempting to connect to $host:$port via VPN for HTTP request")
+            connectTarget(host, port)
+        } catch (e: UnknownHostException) {
+            Log.e(TAG, "DNS resolution failed for $host:$port - ${e.message}", e)
+            sendErrorResponse(writer, 502, "Bad Gateway - DNS resolution failed")
+            return@withContext
+        } catch (e: SocketTimeoutException) {
+            Log.e(TAG, "Connection timeout to $host:$port - ${e.message}", e)
+            sendErrorResponse(writer, 504, "Gateway Timeout")
+            return@withContext
+        } catch (e: ConnectException) {
+            Log.e(TAG, "Connection refused to $host:$port - ${e.message}", e)
+            sendErrorResponse(writer, 502, "Bad Gateway - Connection refused")
+            return@withContext
+        } catch (e: IOException) {
+            Log.e(TAG, "IO error connecting to $host:$port - ${e.javaClass.simpleName}: ${e.message}", e)
+            sendErrorResponse(writer, 502, "Bad Gateway - Network error")
+            return@withContext
+        } catch (e: Exception) {
+            Log.e(TAG, "Unexpected error connecting to $host:$port - ${e.javaClass.simpleName}: ${e.message}", e)
+            sendErrorResponse(writer, 502, "Bad Gateway - Connection failed")
+            return@withContext
+        }
+        
         try {
             val targetOut = BufferedOutputStream(targetSocket.getOutputStream())
             val targetIn = BufferedInputStream(targetSocket.getInputStream())
@@ -319,33 +409,59 @@ class HttpProxyHandler(
             while (true) {
                 try {
                     val n = input.read(buffer)
-                    if (n <= 0) break
+                    if (n <= 0) {
+                        // EOF or connection closed normally
+                        break
+                    }
                     
                     try {
                         forwardThroughVpn(buffer, n, output)
                         total += n
                     } catch (e: SocketException) {
-                        Log.w(TAG, "Connection reset during VPN forward: ${e.message}")
+                        // Connection reset by peer - normal when one side closes
+                        if (e.message?.contains("reset", ignoreCase = true) == true ||
+                            e.message?.contains("broken pipe", ignoreCase = true) == true) {
+                            Log.d(TAG, "Connection closed by peer during ${if (isUpload) "upload" else "download"}")
+                        } else {
+                            Log.w(TAG, "Socket error during VPN forward: ${e.message}")
+                        }
                         break
                     } catch (e: IOException) {
                         Log.w(TAG, "IO error during VPN forward: ${e.message}")
                         break
                     }
+                } catch (e: SocketTimeoutException) {
+                    // Timeout is normal for idle HTTPS connections - continue waiting
+                    // Don't break, just continue the loop
+                    Log.v(TAG, "Read timeout during ${if (isUpload) "upload" else "download"} (normal for idle connections)")
+                    continue
                 } catch (e: SocketException) {
-                    Log.w(TAG, "Connection reset during data tunneling: ${e.message}")
-                    break // Exit the loop on connection reset
+                    // Connection reset - normal when one side closes
+                    if (e.message?.contains("reset", ignoreCase = true) == true ||
+                        e.message?.contains("broken pipe", ignoreCase = true) == true) {
+                        Log.d(TAG, "Connection closed during ${if (isUpload) "upload" else "download"}")
+                    } else {
+                        Log.w(TAG, "Socket error during data tunneling: ${e.message}")
+                    }
+                    break
                 } catch (e: IOException) {
-                    Log.w(TAG, "Error reading data: ${e.message}")
-                    break // Exit the loop on I/O errors
+                    // EOF or other IO error - connection likely closed
+                    if (e.message?.contains("end of stream", ignoreCase = true) == true) {
+                        Log.d(TAG, "End of stream during ${if (isUpload) "upload" else "download"}")
+                    } else {
+                        Log.w(TAG, "IO error reading data: ${e.message}")
+                    }
+                    break
                 }
             }
             
             try {
                 output.flush()
             } catch (e: SocketException) {
-                Log.w(TAG, "Connection reset during flush: ${e.message}")
+                // Ignore flush errors - connection might be closed
+                Log.v(TAG, "Flush failed (connection may be closed): ${e.message}")
             } catch (e: IOException) {
-                Log.w(TAG, "IO error during flush: ${e.message}")
+                Log.v(TAG, "IO error during flush: ${e.message}")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Unexpected error in tunnelData: ${e.message}", e)
@@ -383,11 +499,126 @@ class HttpProxyHandler(
         }
     }
 
-    /** Create a target connection using the VPN-bound SocketFactory */
-    private fun connectTarget(host: String, port: Int): Socket {
-        return socketFactory.createSocket().apply {
-            connect(InetSocketAddress(host, port), /* connect timeout */ 10_000)
-            soTimeout = 30_000
+    /** Create a target connection using the VPN-bound SocketFactory with proper DNS resolution */
+    private suspend fun connectTarget(host: String, port: Int): Socket = withContext(Dispatchers.IO) {
+        val socket = socketFactory.createSocket()
+        var resolvedAddress: InetAddress? = null
+        
+        try {
+            // Check DNS cache first (with TTL validation)
+            var cachedIp: InetAddress? = null
+            synchronized(dnsCacheLock) {
+                val cached = dnsCache[host]
+                if (cached != null) {
+                    val (ip, expirationTime) = cached
+                    if (System.currentTimeMillis() < expirationTime) {
+                        cachedIp = ip
+                        Log.d(TAG, "Using cached DNS for $host -> ${ip.hostAddress}")
+                    } else {
+                        // Cache expired, remove it
+                        dnsCache.remove(host)
+                        Log.d(TAG, "DNS cache expired for $host, will resolve fresh")
+                    }
+                }
+            }
+            
+            // Resolve DNS using VPN network if available, otherwise use cached IP or system DNS
+            resolvedAddress = if (cachedIp != null) {
+                cachedIp
+            } else if (vpnNetwork != null) {
+                // Use VPN network's DNS resolver - this ensures DNS queries go through VPN
+                try {
+                    Log.d(TAG, "Resolving DNS for $host via VPN network")
+                    val addresses = vpnNetwork.getAllByName(host)
+                    if (addresses.isNotEmpty()) {
+                        val ip = addresses[0] // Use first resolved IP
+                        Log.d(TAG, "DNS resolved via VPN: $host -> ${ip.hostAddress}")
+                        
+                        // Cache the resolved IP with TTL
+                        synchronized(dnsCacheLock) {
+                            dnsCache[host] = Pair(ip, System.currentTimeMillis() + DNS_CACHE_TTL_MS)
+                        }
+                        ip
+                    } else {
+                        throw UnknownHostException("No addresses found for $host")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "VPN DNS resolution failed for $host, falling back to socket DNS: ${e.message}")
+                    // Fallback: let socket handle DNS (will use system DNS, but socket goes through VPN)
+                    null
+                }
+            } else {
+                // No VPN network, let socket handle DNS
+                Log.d(TAG, "No VPN network available, using socket DNS for $host")
+                null
+            }
+            
+            // Create socket address
+            val address = if (resolvedAddress != null) {
+                InetSocketAddress(resolvedAddress, port)
+            } else {
+                // Fallback: let socket resolve DNS (will use system DNS)
+                InetSocketAddress(host, port)
+            }
+            
+            // Optimized connection timeout: 10 seconds (reduced from 15s for faster failure detection)
+            socket.connect(address, /* connect timeout */ 10_000)
+            
+            // Cache the final resolved IP if we didn't cache it already
+            val connectedAddress = socket.remoteSocketAddress as? InetSocketAddress
+            if (connectedAddress != null && resolvedAddress == null) {
+                synchronized(dnsCacheLock) {
+                    dnsCache[host] = Pair(connectedAddress.address, System.currentTimeMillis() + DNS_CACHE_TTL_MS)
+                    Log.d(TAG, "Cached DNS resolution from socket: $host -> ${connectedAddress.address.hostAddress}")
+                }
+            }
+            
+            // Note: soTimeout will be set to 0 for HTTPS tunnels in handleConnectRequest
+            // For regular HTTP requests, keep a reasonable timeout
+            socket.soTimeout = 30_000
+            socket.tcpNoDelay = true // Disable Nagle's algorithm for better latency
+            socket.keepAlive = true // Enable TCP keep-alive for better connection stability
+            
+            Log.d(TAG, "Successfully connected to $host:$port")
+            return@withContext socket
+        } catch (e: UnknownHostException) {
+            // DNS resolution failed - clear cache
+            synchronized(dnsCacheLock) {
+                dnsCache.remove(host)
+            }
+            Log.e(TAG, "DNS resolution failed for $host:$port - ${e.message}", e)
+            // Close socket if connection failed
+            try {
+                socket.close()
+            } catch (_: Exception) {
+                // Ignore close errors
+            }
+            throw e
+        } catch (e: SocketTimeoutException) {
+            // Connection timeout - clear cache as IP might be stale
+            synchronized(dnsCacheLock) {
+                dnsCache.remove(host)
+            }
+            Log.e(TAG, "Connection timeout to $host:$port - ${e.message}", e)
+            try {
+                socket.close()
+            } catch (_: Exception) {
+                // Ignore close errors
+            }
+            throw e
+        } catch (e: Exception) {
+            // Clear DNS cache entry on connection failure (might be stale)
+            synchronized(dnsCacheLock) {
+                dnsCache.remove(host)
+            }
+            Log.e(TAG, "Connection failed to $host:$port - ${e.javaClass.simpleName}: ${e.message}", e)
+            // Close socket if connection failed
+            try {
+                socket.close()
+            } catch (_: Exception) {
+                // Ignore close errors
+            }
+            throw e
         }
     }
 
