@@ -138,6 +138,17 @@ private fun formatBytes(bytes: Long): String {
     return "%.1fGB".format(bytes / (1024.0 * 1024.0 * 1024.0))
 }
 
+// Helper function to format speed (bytes per second) in human-readable format
+private fun formatSpeed(bytesPerSecond: Double): String {
+    val bps = bytesPerSecond
+    return when {
+        bps < 1024 -> "%.0f B/s".format(bps)
+        bps < 1024 * 1024 -> "%.1f KB/s".format(bps / 1024.0)
+        bps < 1024 * 1024 * 1024 -> "%.1f MB/s".format(bps / (1024.0 * 1024.0))
+        else -> "%.2f GB/s".format(bps / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
 // Helper function to format time since last seen
 private fun formatTimeSince(timestamp: Long): String {
     val now = System.currentTimeMillis()
@@ -286,6 +297,31 @@ private fun DeviceTrafficCard(device: com.example.shieldshare.managers.meter.Cli
                         text = "${100 - uploadPercent}% download",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            
+            // Speed indicators
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(horizontalAlignment = Alignment.Start) {
+                    Text(
+                        text = "↑ ${formatSpeed(device.currentRateUp)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Medium,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "↓ ${formatSpeed(device.currentRateDown)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                        fontWeight = FontWeight.Medium,
+                        fontFamily = FontFamily.Monospace
                     )
                 }
             }

@@ -26,6 +26,11 @@ class MonitoringViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(MonitoringUiState())
     val uiState: StateFlow<MonitoringUiState> = _uiState.asStateFlow()
+    
+    // Track previous stats for speed calculation (IP -> previous bytes)
+    private val previousStats = mutableMapOf<String, Pair<Long, Long>>() // IP -> (bytesUp, bytesDown)
+    private var lastUpdateTime = System.currentTimeMillis()
+    private val UPDATE_INTERVAL_MS = 2000L // 2 seconds
 
     init {
         // Observe VPN status changes
@@ -41,6 +46,10 @@ class MonitoringViewModel @Inject constructor(
         // Update proxy status and traffic data periodically
         viewModelScope.launch {
             while (true) {
+                val currentTime = System.currentTimeMillis()
+                val timeDelta = (currentTime - lastUpdateTime).coerceAtLeast(100) // At least 100ms to avoid division by zero
+                lastUpdateTime = currentTime
+                
                 val proxyInfo = proxyServer.getProxyInfo()
                 val allTrafficStats = trafficMeter.getCurrentStats()
                 
@@ -52,6 +61,34 @@ class MonitoringViewModel @Inject constructor(
                     allTrafficStats
                 }
                 
+                // Calculate speeds for each client
+                val statsWithSpeeds = trafficStats.map { stats ->
+                    val previous = previousStats[stats.ipAddress]
+                    val (rateUp, rateDown) = if (previous != null) {
+                        // Calculate bytes per second
+                        val bytesUpDiff = stats.totalBytesUp - previous.first
+                        val bytesDownDiff = stats.totalBytesDown - previous.second
+                        val rateUpBps = (bytesUpDiff * 1000.0) / timeDelta // bytes per second
+                        val rateDownBps = (bytesDownDiff * 1000.0) / timeDelta // bytes per second
+                        Pair(rateUpBps, rateDownBps)
+                    } else {
+                        Pair(0.0, 0.0)
+                    }
+                    
+                    // Update previous stats
+                    previousStats[stats.ipAddress] = Pair(stats.totalBytesUp, stats.totalBytesDown)
+                    
+                    // Return stats with calculated speeds
+                    stats.copy(
+                        currentRateUp = rateUp,
+                        currentRateDown = rateDown
+                    )
+                }
+                
+                // Clean up previous stats for clients that are no longer active
+                val activeIps = trafficStats.map { it.ipAddress }.toSet()
+                previousStats.keys.removeAll { it !in activeIps }
+                
                 val rawLogs = (trafficMeter as? TrafficMeterSimple)?.getRawLogs() ?: emptyList()
                 
                 // Calculate total traffic (excluding host device)
@@ -61,13 +98,13 @@ class MonitoringViewModel @Inject constructor(
                 _uiState.value = _uiState.value.copy(
                     isProxyRunning = proxyInfo.isRunning,
                     activeConnections = proxyInfo.activeConnections,
-                    trafficStats = trafficStats,
+                    trafficStats = statsWithSpeeds,
                     totalBytesUp = totalBytesUp,
                     totalBytesDown = totalBytesDown,
                     activeClients = trafficStats.size,
                     rawLogs = rawLogs
                 )
-                kotlinx.coroutines.delay(2000) // Update every 2 seconds for real-time feel
+                kotlinx.coroutines.delay(UPDATE_INTERVAL_MS)
             }
         }
     }
