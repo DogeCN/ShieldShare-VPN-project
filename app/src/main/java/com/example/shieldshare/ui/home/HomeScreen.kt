@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.shieldshare.R
+import com.example.shieldshare.managers.proxy.ProxyType
 import kotlinx.coroutines.launch
 
 @Composable
@@ -166,9 +167,13 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
                                                 subtitle =
                                                         if (!uiState.isHotspotEnabled)
                                                                 "Hotspot required"
-                                                        else if (uiState.isProxyRunning)
-                                                                "HTTP/HTTPS ${uiState.httpPort} · SOCKS5 ${uiState.socks5Port}"
-                                                        else "Not running",
+                                                        else if (uiState.isProxyRunning) {
+                                                                when (uiState.proxyType) {
+                                                                    ProxyType.HTTP_HTTPS -> "HTTP/HTTPS ${uiState.httpPort}"
+                                                                    ProxyType.SOCKS5 -> "SOCKS5 ${uiState.socks5Port}"
+                                                                    ProxyType.BOTH -> "HTTP/HTTPS ${uiState.httpPort} · SOCKS5 ${uiState.socks5Port}"
+                                                                }
+                                                        } else "Not running",
                                                 isDisabled = !uiState.isHotspotEnabled,
                                                 onQrClick = { showQrDialog = true }
                                         )
@@ -605,8 +610,18 @@ fun QrCodeDialog(onDismiss: () -> Unit, viewModel: HomeViewModel, uiState: HomeU
                                                         text =
                                                                 buildString {
                                                                     appendLine("Server: ${viewModel.getHotspotIp()}")
-                                                                    appendLine("HTTP/HTTPS: ${uiState.httpPort}")
-                                                                    append("SOCKS5: ${uiState.socks5Port}")
+                                                                    when (uiState.proxyType) {
+                                                                        ProxyType.HTTP_HTTPS -> {
+                                                                            append("HTTP/HTTPS: ${uiState.httpPort}")
+                                                                        }
+                                                                        ProxyType.SOCKS5 -> {
+                                                                            append("SOCKS5: ${uiState.socks5Port}")
+                                                                        }
+                                                                        ProxyType.BOTH -> {
+                                                                            appendLine("HTTP/HTTPS: ${uiState.httpPort}")
+                                                                            append("SOCKS5: ${uiState.socks5Port}")
+                                                                        }
+                                                                    }
                                                                 },
                                                         style = MaterialTheme.typography.bodySmall,
                                                         color = MaterialTheme.colorScheme.primary,

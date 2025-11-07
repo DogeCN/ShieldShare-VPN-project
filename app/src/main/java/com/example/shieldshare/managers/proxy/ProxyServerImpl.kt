@@ -467,34 +467,144 @@ class ProxyServerImpl(
 
             val hotspotIp = hotspotManager.getHotspotIpAddress() ?: "192.168.43.1"
 
-            val htmlContent = generateAutoConfigPage(hotspotIp, config)
-            val contentBytes = htmlContent.toByteArray(Charsets.UTF_8)
+            // Check if this is a PAC file request
+            val isPacRequest = request.contains("/proxy.pac", ignoreCase = true)
+            
+            if (isPacRequest) {
+                // Generate and serve PAC file
+                val pacContent = generatePacFile(hotspotIp, config)
+                val pacBytes = pacContent.toByteArray(Charsets.UTF_8)
+                
+                // Check if this is a download request (has ?download parameter)
+                val isDownload = request.contains("?download", ignoreCase = true) || 
+                                 request.contains("download=1", ignoreCase = true)
+                
+                val response = StringBuilder()
+                response.append("HTTP/1.1 200 OK\r\n")
+                response.append("Content-Type: application/x-ns-proxy-autoconfig; charset=UTF-8\r\n")
+                if (isDownload) {
+                    response.append("Content-Disposition: attachment; filename=\"proxy.pac\"\r\n")
+                }
+                response.append("Content-Length: ${pacBytes.size}\r\n")
+                response.append("Connection: close\r\n")
+                response.append("\r\n")
+                response.append(pacContent)
+                
+                output.write(response.toString().toByteArray(Charsets.UTF_8))
+                output.flush()
+            } else {
+                // Generate and serve HTML configuration page
+                val htmlContent = generateAutoConfigPage(hotspotIp, config)
+                val contentBytes = htmlContent.toByteArray(Charsets.UTF_8)
 
-            // Proper HTTP response format with \r\n line endings
-            val response = StringBuilder()
-            response.append("HTTP/1.1 200 OK\r\n")
-            response.append("Content-Type: text/html; charset=UTF-8\r\n")
-            response.append("Content-Length: ${contentBytes.size}\r\n")
-            response.append("Connection: close\r\n")
-            response.append("\r\n")
-            response.append(htmlContent)
+                val response = StringBuilder()
+                response.append("HTTP/1.1 200 OK\r\n")
+                response.append("Content-Type: text/html; charset=UTF-8\r\n")
+                response.append("Content-Length: ${contentBytes.size}\r\n")
+                response.append("Connection: close\r\n")
+                response.append("\r\n")
+                response.append(htmlContent)
 
-            output.write(response.toString().toByteArray(Charsets.UTF_8))
-            output.flush()
+                output.write(response.toString().toByteArray(Charsets.UTF_8))
+                output.flush()
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error handling web request", e)
         } finally {
             socket.close()
         }
     }
+    
+    /** Generate PAC file based on enabled protocols */
+    private fun generatePacFile(hotspotIp: String, config: ProxyConfig): String {
+        val httpPort = config.httpPort
+        val socksPort = config.socks5Port
+        
+        val proxyList = buildList {
+            when (config.proxyType) {
+                ProxyType.HTTP_HTTPS -> {
+                    add("PROXY $hotspotIp:$httpPort")
+                }
+                ProxyType.SOCKS5 -> {
+                    add("SOCKS5 $hotspotIp:$socksPort")
+                }
+                ProxyType.BOTH -> {
+                    add("PROXY $hotspotIp:$httpPort")
+                    add("SOCKS5 $hotspotIp:$socksPort")
+                }
+            }
+            add("DIRECT") // Fallback
+        }
+        
+        return """
+function FindProxyForURL(url, host) {
+    // ShieldShare PAC Configuration
+    // Generated automatically for hotspot clients
+    
+    // Direct access for local networks
+    if (isLocalNetwork(host)) {
+        return "DIRECT";
+    }
+    
+    // Direct access for localhost
+    if (host == "localhost" || host == "127.0.0.1" || host == "::1") {
+        return "DIRECT";
+    }
+    
+    // Use configured proxy based on enabled protocols
+    return "${proxyList.joinToString("; ")}";
+}
+
+function isLocalNetwork(host) {
+    // Check if host is in local network ranges
+    var parts = host.split(".");
+    if (parts.length == 4) {
+        var first = parseInt(parts[0]);
+        var second = parseInt(parts[1]);
+        // 192.168.x.x
+        if (first == 192 && second == 168) return true;
+        // 10.x.x.x
+        if (first == 10) return true;
+        // 172.16.x.x - 172.31.x.x
+        if (first == 172 && second >= 16 && second <= 31) return true;
+        // 127.x.x.x
+        if (first == 127) return true;
+    }
+    return false;
+}
+        """.trimIndent()
+    }
 
     /** Generate auto-configuration HTML page */
     private fun generateAutoConfigPage(hotspotIp: String, config: ProxyConfig): String {
         val httpPort = config.httpPort
-        val httpsPort = config.httpsPort
         val socksPort = config.socks5Port
         val portalPort = ProxyPortManager.CONFIG_PORT
         val pacUrl = "http://$hotspotIp:$portalPort/proxy.pac"
+        
+        // Build manual proxy settings list based on enabled protocols
+        val manualProxySettings = buildList {
+            when (config.proxyType) {
+                ProxyType.HTTP_HTTPS -> {
+                    add("<li>HTTP/HTTPS Proxy: <span class=\"mini-code\">$hotspotIp:$httpPort</span></li>")
+                }
+                ProxyType.SOCKS5 -> {
+                    add("<li>SOCKS5 Proxy: <span class=\"mini-code\">$hotspotIp:$socksPort</span></li>")
+                }
+                ProxyType.BOTH -> {
+                    add("<li>HTTP/HTTPS Proxy: <span class=\"mini-code\">$hotspotIp:$httpPort</span></li>")
+                    add("<li>SOCKS5 Proxy: <span class=\"mini-code\">$hotspotIp:$socksPort</span></li>")
+                }
+            }
+        }
+        
+        // Build alert message for auto-configure based on enabled protocols
+        val alertMessage = when (config.proxyType) {
+            ProxyType.HTTP_HTTPS -> "HTTP/HTTPS: $hotspotIp:$httpPort"
+            ProxyType.SOCKS5 -> "SOCKS5: $hotspotIp:$socksPort"
+            ProxyType.BOTH -> "HTTP/HTTPS: $hotspotIp:$httpPort\\nSOCKS5: $hotspotIp:$socksPort"
+        }
+        
         return """
 <!DOCTYPE html>
 <html lang="en">
@@ -539,8 +649,7 @@ class ProxyServerImpl(
             <h3>Manual Proxy Settings</h3>
             <p>Configure the following on your client device:</p>
             <ul>
-                <li>HTTP/HTTPS Proxy: <span class="mini-code">$hotspotIp:$httpPort</span></li>
-                <li>SOCKS5 Proxy: <span class="mini-code">$hotspotIp:$socksPort</span></li>
+                ${manualProxySettings.joinToString("\n                ")}
             </ul>
         </div>
         
@@ -556,16 +665,17 @@ class ProxyServerImpl(
         function autoConfigure() {
             // Try to open system proxy settings
             if (navigator.userAgent.includes('Android')) {
-                alert('Please manually configure proxy in Android Wi-Fi settings:\\n\\nHTTP/HTTPS: $hotspotIp:$httpPort\\nSOCKS5: $hotspotIp:$socksPort');
+                alert('Please manually configure proxy in Android Wi-Fi settings:\\n\\n$alertMessage');
             } else if (navigator.userAgent.includes('iPhone') || navigator.userAgent.includes('iPad')) {
-                alert('Please manually configure proxy in iOS Wi-Fi settings:\\n\\nHTTP/HTTPS: $hotspotIp:$httpPort\\nSOCKS5: $hotspotIp:$socksPort');
+                alert('Please manually configure proxy in iOS Wi-Fi settings:\\n\\n$alertMessage');
             } else {
                 alert('Auto-configuration not supported on this device.\\nPlease use manual configuration.');
             }
         }
         
         function downloadPAC() {
-            window.open('$pacUrl', '_blank');
+            // Force download by adding ?download parameter
+            window.location.href = '$pacUrl?download=1';
         }
         
         // Auto-detect device type and show appropriate instructions
