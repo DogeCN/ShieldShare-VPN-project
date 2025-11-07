@@ -40,7 +40,6 @@ constructor(
                             themeMode = themeMode,
                             notificationsEnabled =
                                     appPrefs.getBoolean("notifications_enabled", true),
-                            databaseEncryption = appPrefs.getBoolean("database_encryption", false),
                             httpHttpsEnabled = appPrefs.getBoolean("http_https_enabled", true),
                             socks5Enabled = appPrefs.getBoolean("socks5_enabled", true)
                     )
@@ -99,7 +98,6 @@ constructor(
             appPrefs.putBoolean("auth_enabled", state.authEnabled)
             appPrefs.putString("theme_mode", state.themeMode.name)
             appPrefs.putBoolean("notifications_enabled", state.notificationsEnabled)
-            appPrefs.putBoolean("database_encryption", state.databaseEncryption)
             appPrefs.putBoolean("http_https_enabled", state.httpHttpsEnabled)
             appPrefs.putBoolean("socks5_enabled", state.socks5Enabled)
         }
@@ -110,7 +108,6 @@ data class SettingsUiState(
         val authEnabled: Boolean = false,
         val themeMode: ThemeMode = ThemeMode.SYSTEM,
         val notificationsEnabled: Boolean = true,
-        val databaseEncryption: Boolean = false,
         val httpHttpsEnabled: Boolean = true,
         val socks5Enabled: Boolean = true,
         val validationError: String? = null
