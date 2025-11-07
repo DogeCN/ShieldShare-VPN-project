@@ -125,12 +125,26 @@ constructor(
         viewModelScope.launch {
             try {
                 val authEnabled = appPrefs.getBoolean("auth_enabled", false)
+                val httpHttpsEnabled = appPrefs.getBoolean("http_https_enabled", true)
+                val socks5Enabled = appPrefs.getBoolean("socks5_enabled", true)
+
+                // Determine proxy type based on enabled protocols
+                val proxyType = when {
+                    httpHttpsEnabled && socks5Enabled -> ProxyType.BOTH
+                    httpHttpsEnabled -> ProxyType.HTTP_HTTPS
+                    socks5Enabled -> ProxyType.SOCKS5
+                    else -> {
+                        // If both are disabled, default to BOTH to ensure at least one protocol is available
+                        Log.w("HomeViewModel", "Both protocols disabled, defaulting to BOTH")
+                        ProxyType.BOTH
+                    }
+                }
 
                 val config =
                         ProxyConfig(
                                 authEnabled = authEnabled,
                                 allowedClients = emptyList(),
-                                proxyType = ProxyType.BOTH
+                                proxyType = proxyType
                         )
 
                 val result = proxyServer.startProxy(config)

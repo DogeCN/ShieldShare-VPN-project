@@ -3,24 +3,19 @@ package com.example.shieldshare.ui.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.shieldshare.data.prefs.AppPrefs
-import com.example.shieldshare.managers.proxy.ProxyServer
 import com.example.shieldshare.ui.theme.ThemeMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 @HiltViewModel
 class SettingsViewModel
 @Inject
 constructor(
-        private val appPrefs: AppPrefs,
-        private val proxyServer: ProxyServer
+        private val appPrefs: AppPrefs
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState())
@@ -45,7 +40,9 @@ constructor(
                             themeMode = themeMode,
                             notificationsEnabled =
                                     appPrefs.getBoolean("notifications_enabled", true),
-                            databaseEncryption = appPrefs.getBoolean("database_encryption", false)
+                            databaseEncryption = appPrefs.getBoolean("database_encryption", false),
+                            httpHttpsEnabled = appPrefs.getBoolean("http_https_enabled", true),
+                            socks5Enabled = appPrefs.getBoolean("socks5_enabled", true)
                     )
         }
     }
@@ -66,6 +63,36 @@ constructor(
         _uiState.value = _uiState.value.copy(notificationsEnabled = enabled)
     }
 
+    fun updateHttpHttpsEnabled(enabled: Boolean) {
+        val currentState = _uiState.value
+        // Prevent disabling if SOCKS5 is already disabled
+        if (!enabled && !currentState.socks5Enabled) {
+            _uiState.value = currentState.copy(
+                validationError = "At least one proxy protocol must be enabled"
+            )
+            return
+        }
+        _uiState.value = currentState.copy(
+            httpHttpsEnabled = enabled,
+            validationError = null
+        )
+    }
+
+    fun updateSocks5Enabled(enabled: Boolean) {
+        val currentState = _uiState.value
+        // Prevent disabling if HTTP/HTTPS is already disabled
+        if (!enabled && !currentState.httpHttpsEnabled) {
+            _uiState.value = currentState.copy(
+                validationError = "At least one proxy protocol must be enabled"
+            )
+            return
+        }
+        _uiState.value = currentState.copy(
+            socks5Enabled = enabled,
+            validationError = null
+        )
+    }
+
     fun saveSettings() {
         viewModelScope.launch {
             val state = _uiState.value
@@ -73,6 +100,8 @@ constructor(
             appPrefs.putString("theme_mode", state.themeMode.name)
             appPrefs.putBoolean("notifications_enabled", state.notificationsEnabled)
             appPrefs.putBoolean("database_encryption", state.databaseEncryption)
+            appPrefs.putBoolean("http_https_enabled", state.httpHttpsEnabled)
+            appPrefs.putBoolean("socks5_enabled", state.socks5Enabled)
         }
     }
 }
@@ -81,5 +110,8 @@ data class SettingsUiState(
         val authEnabled: Boolean = false,
         val themeMode: ThemeMode = ThemeMode.SYSTEM,
         val notificationsEnabled: Boolean = true,
-        val databaseEncryption: Boolean = false
+        val databaseEncryption: Boolean = false,
+        val httpHttpsEnabled: Boolean = true,
+        val socks5Enabled: Boolean = true,
+        val validationError: String? = null
 )

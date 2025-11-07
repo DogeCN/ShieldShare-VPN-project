@@ -22,15 +22,30 @@ fun SettingsScreen(
     onThemeChanged: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
 
-    LazyColumn(
-            modifier =
-                    Modifier.fillMaxSize()
-                            .background(MaterialTheme.colorScheme.background)
-                            .padding(16.dp)
-                            .safeDrawingPadding(),
+    // Show validation error snackbar
+    LaunchedEffect(uiState.validationError) {
+        uiState.validationError?.let { error ->
+            snackbarHostState.showSnackbar(
+                message = error,
+                duration = SnackbarDuration.Short
+            )
+        }
+    }
+
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) }
+    ) { paddingValues ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .background(MaterialTheme.colorScheme.background)
+                .padding(16.dp)
+                .safeDrawingPadding(),
             verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
+        ) {
 
         item {
             Card(
@@ -53,22 +68,83 @@ fun SettingsScreen(
                     )
 
                     Text(
-                            text =
-                                    "HTTP/HTTPS ${ProxyPortManager.HTTP_PORT}, SOCKS5 ${ProxyPortManager.SOCKS5_PORT}",
+                            text = "Note: Restart proxy server for changes to take effect",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.primary,
                     )
 
+                    // HTTP/HTTPS Proxy Toggle
                     Row(
                             modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Checkbox(
-                                checked = uiState.authEnabled,
-                                onCheckedChange = viewModel::updateAuthEnabled
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                    text = "HTTP/HTTPS Proxy",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                    text = "Port ${ProxyPortManager.HTTP_PORT}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                                checked = uiState.httpHttpsEnabled,
+                                onCheckedChange = { enabled ->
+                                    viewModel.updateHttpHttpsEnabled(enabled)
+                                },
+                                enabled = uiState.socks5Enabled || !uiState.httpHttpsEnabled // Disable only when SOCKS5 is off and HTTP/HTTPS is on
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Enable Authentication")
+                    }
+
+                    // SOCKS5 Proxy Toggle
+                    Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                    text = "SOCKS5 Proxy",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                    text = "Port ${ProxyPortManager.SOCKS5_PORT}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                                checked = uiState.socks5Enabled,
+                                onCheckedChange = { enabled ->
+                                    viewModel.updateSocks5Enabled(enabled)
+                                },
+                                enabled = uiState.httpHttpsEnabled || !uiState.socks5Enabled // Disable only when HTTP/HTTPS is off and SOCKS5 is on
+                        )
+                    }
+
+                    Divider()
+
+                    // Authentication Toggle
+                    Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                                text = "Enable Authentication",
+                                style = MaterialTheme.typography.bodyMedium
+                        )
+                        Switch(
+                                checked = uiState.authEnabled,
+                                onCheckedChange = { enabled ->
+                                    viewModel.updateAuthEnabled(enabled)
+                                }
+                        )
                     }
                 }
             }
@@ -113,14 +189,19 @@ fun SettingsScreen(
 
                     Row(
                             modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Checkbox(
-                                checked = uiState.notificationsEnabled,
-                                onCheckedChange = viewModel::updateNotificationsEnabled
+                        Text(
+                                text = "Enable Notifications",
+                                style = MaterialTheme.typography.bodyMedium
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Enable Notifications")
+                        Switch(
+                                checked = uiState.notificationsEnabled,
+                                onCheckedChange = { enabled ->
+                                    viewModel.updateNotificationsEnabled(enabled)
+                                }
+                        )
                     }
                 }
             }
@@ -137,6 +218,7 @@ fun SettingsScreen(
             ) {
                 Text("Save Settings")
             }
+        }
         }
     }
 }

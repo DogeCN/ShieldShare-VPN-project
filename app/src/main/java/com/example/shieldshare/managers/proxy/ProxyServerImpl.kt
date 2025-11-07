@@ -80,8 +80,25 @@ class ProxyServerImpl(
                     val hotspotIp = hotspotManager.getHotspotIpAddress()
 
                     try {
-                        httpServerSocket = createServerSocket(config.httpPort, hotspotIp)
-                        socksServerSocket = createServerSocket(config.socks5Port, hotspotIp)
+                        // Conditionally start servers based on proxyType
+                        when (config.proxyType) {
+                            ProxyType.HTTP_HTTPS -> {
+                                httpServerSocket = createServerSocket(config.httpPort, hotspotIp)
+                                Log.i(TAG, "Starting HTTP/HTTPS proxy server on port ${config.httpPort}")
+                            }
+                            ProxyType.SOCKS5 -> {
+                                socksServerSocket = createServerSocket(config.socks5Port, hotspotIp)
+                                Log.i(TAG, "Starting SOCKS5 proxy server on port ${config.socks5Port}")
+                            }
+                            ProxyType.BOTH -> {
+                                httpServerSocket = createServerSocket(config.httpPort, hotspotIp)
+                                socksServerSocket = createServerSocket(config.socks5Port, hotspotIp)
+                                Log.i(
+                                        TAG,
+                                        "Starting both proxy servers (HTTP/HTTPS ${config.httpPort}, SOCKS5 ${config.socks5Port})"
+                                )
+                            }
+                        }
                     } catch (bindError: Exception) {
                         Log.e(TAG, "Failed to bind proxy sockets", bindError)
                         closeServer(httpServerSocket)
@@ -98,25 +115,49 @@ class ProxyServerImpl(
                             )
                     currentInstance = instance
 
-                    Log.i(
-                            TAG,
-                            "Proxy servers bound (HTTP/HTTPS ${config.httpPort}, SOCKS5 ${config.socks5Port})"
-                    )
-
-                    serviceScope.launch {
-                        httpServerSocket?.let { socket ->
-                            Log.d(
-                                    TAG,
-                                    "Starting HTTP/HTTPS acceptor coroutine on port ${socket.localPort}"
-                            )
-                            acceptConnections(socket, "HTTP/HTTPS")
+                    // Start acceptor coroutines only for enabled protocols
+                    when (config.proxyType) {
+                        ProxyType.HTTP_HTTPS -> {
+                            serviceScope.launch {
+                                httpServerSocket?.let { socket ->
+                                    Log.d(
+                                            TAG,
+                                            "Starting HTTP/HTTPS acceptor coroutine on port ${socket.localPort}"
+                                    )
+                                    acceptConnections(socket, "HTTP/HTTPS")
+                                }
+                            }
                         }
-                    }
-
-                    serviceScope.launch {
-                        socksServerSocket?.let { socket ->
-                            Log.d(TAG, "Starting SOCKS5 acceptor coroutine on port ${socket.localPort}")
-                            acceptConnections(socket, "SOCKS5")
+                        ProxyType.SOCKS5 -> {
+                            serviceScope.launch {
+                                socksServerSocket?.let { socket ->
+                                    Log.d(
+                                            TAG,
+                                            "Starting SOCKS5 acceptor coroutine on port ${socket.localPort}"
+                                    )
+                                    acceptConnections(socket, "SOCKS5")
+                                }
+                            }
+                        }
+                        ProxyType.BOTH -> {
+                            serviceScope.launch {
+                                httpServerSocket?.let { socket ->
+                                    Log.d(
+                                            TAG,
+                                            "Starting HTTP/HTTPS acceptor coroutine on port ${socket.localPort}"
+                                    )
+                                    acceptConnections(socket, "HTTP/HTTPS")
+                                }
+                            }
+                            serviceScope.launch {
+                                socksServerSocket?.let { socket ->
+                                    Log.d(
+                                            TAG,
+                                            "Starting SOCKS5 acceptor coroutine on port ${socket.localPort}"
+                                    )
+                                    acceptConnections(socket, "SOCKS5")
+                                }
+                            }
                         }
                     }
 
@@ -195,7 +236,7 @@ class ProxyServerImpl(
         }
     }
 
-    override fun handleClientConnection(socket: Socket) {
+    override fun handleClientConnection(socket: Socket, expectedProtocol: ProxyType?) {
         val clientId = "${socket.remoteSocketAddress}_${System.currentTimeMillis()}"
 
         // Validate socket connection to prevent crashes
@@ -235,12 +276,17 @@ class ProxyServerImpl(
         // to avoid Traffic leakage
         val strictVpn = true
 
-        // If BOTH, detect protocol and create handler with inOverride
-        val (ptype, inOverride) = when (currentInstance?.config?.proxyType) {
-            ProxyType.BOTH -> detectProtocolAndWrap(socket)
-            ProxyType.HTTP_HTTPS -> ProxyType.HTTP_HTTPS to null
-            ProxyType.SOCKS5 -> ProxyType.SOCKS5 to null
-            else -> return
+        // Determine protocol type - use expectedProtocol if provided, otherwise detect
+        val (ptype, inOverride) = when {
+            expectedProtocol != null -> expectedProtocol to null
+            currentInstance?.config?.proxyType == ProxyType.BOTH -> detectProtocolAndWrap(socket)
+            currentInstance?.config?.proxyType == ProxyType.HTTP_HTTPS -> ProxyType.HTTP_HTTPS to null
+            currentInstance?.config?.proxyType == ProxyType.SOCKS5 -> ProxyType.SOCKS5 to null
+            else -> {
+                Log.w(TAG, "Unknown proxy type, closing connection")
+                safeClose(socket)
+                return
+            }
         }
 
         // If strict and no VPN, send appropriate error reply and close
@@ -324,6 +370,13 @@ class ProxyServerImpl(
                 "$protocolLabel acceptor started, waiting for connections on port ${serverSocket.localPort}"
         )
 
+        // Determine protocol type from label
+        val expectedProtocol = when (protocolLabel) {
+            "HTTP/HTTPS" -> ProxyType.HTTP_HTTPS
+            "SOCKS5" -> ProxyType.SOCKS5
+            else -> null // Will use detection if null
+        }
+
         while (isActive && !serverSocket.isClosed) {
             try {
                 val clientSocket = serverSocket.accept()
@@ -331,7 +384,7 @@ class ProxyServerImpl(
                         TAG,
                         "[$protocolLabel] New client connection: ${clientSocket.remoteSocketAddress}"
                 )
-                handleClientConnection(clientSocket)
+                handleClientConnection(clientSocket, expectedProtocol)
             } catch (e: Exception) {
                 if (!serverSocket.isClosed) {
                     Log.e(TAG, "Error accepting $protocolLabel connection", e)
