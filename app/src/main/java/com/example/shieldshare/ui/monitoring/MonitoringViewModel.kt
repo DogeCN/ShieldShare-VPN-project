@@ -8,6 +8,7 @@ import com.example.shieldshare.managers.meter.ClientTrafficStats
 import com.example.shieldshare.managers.proxy.ProxyServer
 import com.example.shieldshare.managers.vpn.VpnManager
 import com.example.shieldshare.managers.vpn.VpnStatus
+import com.example.shieldshare.managers.hotspot.HotspotManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,7 +20,8 @@ import javax.inject.Inject
 class MonitoringViewModel @Inject constructor(
     private val vpnManager: VpnManager,
     private val proxyServer: ProxyServer,
-    private val trafficMeter: TrafficMeter
+    private val trafficMeter: TrafficMeter,
+    private val hotspotManager: HotspotManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(MonitoringUiState())
@@ -40,10 +42,19 @@ class MonitoringViewModel @Inject constructor(
         viewModelScope.launch {
             while (true) {
                 val proxyInfo = proxyServer.getProxyInfo()
-                val trafficStats = trafficMeter.getCurrentStats()
+                val allTrafficStats = trafficMeter.getCurrentStats()
+                
+                // Filter out host device IP from traffic stats
+                val hostIp = hotspotManager.getHotspotIpAddress()
+                val trafficStats = if (hostIp != null) {
+                    allTrafficStats.filter { it.ipAddress != hostIp }
+                } else {
+                    allTrafficStats
+                }
+                
                 val rawLogs = (trafficMeter as? TrafficMeterSimple)?.getRawLogs() ?: emptyList()
                 
-                // Calculate total traffic
+                // Calculate total traffic (excluding host device)
                 val totalBytesUp = trafficStats.sumOf { it.totalBytesUp }
                 val totalBytesDown = trafficStats.sumOf { it.totalBytesDown }
                 

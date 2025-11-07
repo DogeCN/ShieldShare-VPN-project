@@ -206,18 +206,49 @@ class ProxyServerImpl(
 
     override fun getProxyInfo(): ProxyInfo {
         val instance = currentInstance
-        val clientCount = connectedClients.size
-        Log.d(TAG, "getProxyInfo() called - Connected clients count: $clientCount")
+        
+        // Filter out host device IP from client count
+        val hostIp = hotspotManager.getHotspotIpAddress()
+        val clientCount = if (hostIp != null) {
+            connectedClients.keys.count { it != hostIp }
+        } else {
+            connectedClients.size
+        }
+        
+        Log.d(TAG, "getProxyInfo() called - Connected clients count: $clientCount (host IP: $hostIp)")
+        
+        // More robust proxy status detection:
+        // Check if sockets exist and are not closed
+        val isRunning = try {
+            val httpRunning = httpServerSocket != null && !httpServerSocket!!.isClosed
+            val socksRunning = socksServerSocket != null && !socksServerSocket!!.isClosed
+            
+            // Proxy is running if at least one socket is open
+            // Also check instance to handle edge cases during startup/shutdown
+            val socketsRunning = httpRunning || socksRunning
+            val hasInstance = instance != null
+            
+            // If instance exists, we trust it (sockets might be temporarily null during transitions)
+            // Otherwise, rely on socket state
+            if (hasInstance) {
+                socketsRunning || (httpServerSocket != null || socksServerSocket != null)
+            } else {
+                socketsRunning
+            }
+        } catch (e: Exception) {
+            // If there's an exception checking socket state, fall back to instance check
+            Log.w(TAG, "Error checking proxy status, using instance check: ${e.message}")
+            instance != null
+        }
+        
         return if (instance != null) {
             ProxyInfo(
-                    isRunning =
-                            (httpServerSocket?.isClosed == false) ||
-                                    (socksServerSocket?.isClosed == false),
+                    isRunning = isRunning,
                     httpPort = instance.config.httpPort,
                     httpsPort = instance.config.httpsPort,
                     socks5Port = instance.config.socks5Port,
                     proxyType = instance.config.proxyType,
-                    activeConnections = clientCount, // Use unique client count
+                    activeConnections = clientCount, // Use filtered client count (excluding host)
                     pacFileUrl =
                             hotspotManager.getHotspotIpAddress()?.let { hotspotIp ->
                                 "http://$hotspotIp:${ProxyPortManager.CONFIG_PORT}/proxy.pac"
@@ -226,12 +257,12 @@ class ProxyServerImpl(
             )
         } else {
             ProxyInfo(
-                    isRunning = false,
+                    isRunning = isRunning, // Still check sockets even if instance is null (might be during shutdown)
                     httpPort = ProxyPortManager.HTTP_PORT,
                     httpsPort = ProxyPortManager.HTTPS_PORT,
                     socks5Port = ProxyPortManager.SOCKS5_PORT,
                     proxyType = ProxyType.BOTH,
-                    activeConnections = 0
+                    activeConnections = clientCount
             )
         }
     }
@@ -253,23 +284,31 @@ class ProxyServerImpl(
         // Track unique client IP for counting - ENHANCED LOGGING
         val clientIp =
                 socket.remoteSocketAddress.toString().substringAfter("/").substringBefore(':')
-        val isNewClient = !connectedClients.containsKey(clientIp)
-        connectedClients[clientIp] = System.currentTimeMillis()
-
-        if (isNewClient) {
-            Log.i(TAG, "NEW CLIENT connected via proxy: $clientIp (Total unique clients: ${connectedClients.size})")
-            // Try to get device name for new clients
-            serviceScope.launch {
-                val deviceName = tryGetDeviceName(clientIp)
-                if (deviceName != null && deviceName != clientIp) {
-                    Log.i(TAG, "Device name for new client $clientIp: $deviceName")
-                }
-            }
+        
+        // Filter out host device IP - don't count it as a client
+        val hostIp = hotspotManager.getHotspotIpAddress()
+        if (hostIp != null && clientIp == hostIp) {
+            Log.d(TAG, "Ignoring connection from host device IP: $clientIp")
+            // Still process the connection, just don't count it as a client
         } else {
-            Log.d(
-                    TAG,
-                    "Existing client reconnected: $clientIp (Total unique clients: ${connectedClients.size})"
-            )
+            val isNewClient = !connectedClients.containsKey(clientIp)
+            connectedClients[clientIp] = System.currentTimeMillis()
+
+            if (isNewClient) {
+                Log.i(TAG, "NEW CLIENT connected via proxy: $clientIp (Total unique clients: ${connectedClients.size})")
+                // Try to get device name for new clients
+                serviceScope.launch {
+                    val deviceName = tryGetDeviceName(clientIp)
+                    if (deviceName != null && deviceName != clientIp) {
+                        Log.i(TAG, "Device name for new client $clientIp: $deviceName")
+                    }
+                }
+            } else {
+                Log.d(
+                        TAG,
+                        "Existing client reconnected: $clientIp (Total unique clients: ${connectedClients.size})"
+                )
+            }
         }
 
         // Strict mode: ensure all outbound sockets go via VPN; if not connected, reject early
