@@ -167,11 +167,16 @@ class HttpProxyHandler(
         // Read all headers (text-mode)
         val headers = mutableListOf<String>()
         var line: String?
+        var contentLength: Int? = null
         while (reader.readLine().also { line = it } != null && line!!.isNotEmpty()) {
             val h = line!!
             headers.add(h)
             if (h.lowercase().startsWith("user-agent:")) {
                 userAgent = h.substringAfter(":").trim()
+            }
+            // Extract Content-Length for POST/PUT requests
+            if (h.lowercase().startsWith("content-length:")) {
+                contentLength = h.substringAfter(":").trim().toIntOrNull()
             }
         }
 
@@ -208,17 +213,41 @@ class HttpProxyHandler(
             val targetOut = BufferedOutputStream(targetSocket.getOutputStream())
             val targetIn = BufferedInputStream(targetSocket.getInputStream())
             val clientOut = BufferedOutputStream(socket.getOutputStream())
+            val clientIn = socket.getInputStream()
 
             // Send request line + headers
             var connectionOk = true
+            var totalUp = 0L
             try {
                 forwardThroughVpn(preface, preface.size, targetOut)
+                
+                // Read and forward request body for POST/PUT/PATCH requests
+                if (contentLength != null && contentLength!! > 0 && 
+                    (method.equals("POST", ignoreCase = true) || 
+                     method.equals("PUT", ignoreCase = true) || 
+                     method.equals("PATCH", ignoreCase = true))) {
+                    Log.d(TAG, "Reading request body: $contentLength bytes for $method request")
+                    val bodyBuffer = ByteArray(BUFFER_SIZE)
+                    var remaining = contentLength!!
+                    
+                    while (remaining > 0) {
+                        val toRead = minOf(remaining, BUFFER_SIZE)
+                        val read = clientIn.read(bodyBuffer, 0, toRead)
+                        if (read <= 0) break
+                        
+                        forwardThroughVpn(bodyBuffer, read, targetOut)
+                        totalUp += read
+                        remaining -= read
+                    }
+                    Log.d(TAG, "Forwarded request body: ${contentLength!! - remaining} bytes")
+                }
+                
                 targetOut.flush()
             } catch (e: SocketException) {
-                Log.w(TAG, "Connection reset while sending headers: ${e.message}")
+                Log.w(TAG, "Connection reset while sending request: ${e.message}")
                 connectionOk = false
             } catch (e: IOException) {
-                Log.w(TAG, "IO error while sending headers: ${e.message}")
+                Log.w(TAG, "IO error while sending request: ${e.message}")
                 connectionOk = false
             }
 
@@ -260,9 +289,10 @@ class HttpProxyHandler(
                         Log.w(TAG, "IO error during response flush: ${e.message}")
                     }
                 } finally {
-                    // traffic accounting
+                    // traffic accounting (include request body in upload)
+                    bytesUp.addAndGet(totalUp)
                     bytesDown.addAndGet(totalDown)
-                    trafficMeter.recordTraffic(clientIp, 0, totalDown)
+                    trafficMeter.recordTraffic(clientIp, totalUp, totalDown)
                 }
             }
         } catch (e: Exception) {

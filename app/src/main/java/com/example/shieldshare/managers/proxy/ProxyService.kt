@@ -7,5 +7,5 @@ interface ProxyServer {
     suspend fun startProxy(config: ProxyConfig): Result<ProxyInstance>
     suspend fun stopProxy(): Result<Unit>
     fun getProxyInfo(): ProxyInfo
-    fun handleClientConnection(socket: Socket)
+    fun handleClientConnection(socket: Socket, expectedProtocol: ProxyType? = null)
 }

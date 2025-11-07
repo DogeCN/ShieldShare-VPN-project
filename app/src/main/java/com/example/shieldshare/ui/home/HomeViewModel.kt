@@ -125,12 +125,26 @@ constructor(
         viewModelScope.launch {
             try {
                 val authEnabled = appPrefs.getBoolean("auth_enabled", false)
+                val httpHttpsEnabled = appPrefs.getBoolean("http_https_enabled", true)
+                val socks5Enabled = appPrefs.getBoolean("socks5_enabled", true)
+
+                // Determine proxy type based on enabled protocols
+                val proxyType = when {
+                    httpHttpsEnabled && socks5Enabled -> ProxyType.BOTH
+                    httpHttpsEnabled -> ProxyType.HTTP_HTTPS
+                    socks5Enabled -> ProxyType.SOCKS5
+                    else -> {
+                        // If both are disabled, default to BOTH to ensure at least one protocol is available
+                        Log.w("HomeViewModel", "Both protocols disabled, defaulting to BOTH")
+                        ProxyType.BOTH
+                    }
+                }
 
                 val config =
                         ProxyConfig(
                                 authEnabled = authEnabled,
                                 allowedClients = emptyList(),
-                                proxyType = ProxyType.BOTH
+                                proxyType = proxyType
                         )
 
                 val result = proxyServer.startProxy(config)
@@ -151,6 +165,7 @@ constructor(
                                             httpPort = config.httpPort,
                                             httpsPort = config.httpsPort,
                                             socks5Port = config.socks5Port,
+                                            proxyType = proxyType,
                                             configPortalPort = ProxyPortManager.CONFIG_PORT,
                                             pacUrl = pacUrl,
                                             uploadSpeed = "0 KB/s",
@@ -251,6 +266,7 @@ constructor(
                                 httpPort = proxyInfo.httpPort,
                                 httpsPort = proxyInfo.httpsPort,
                                 socks5Port = proxyInfo.socks5Port,
+                                proxyType = proxyInfo.proxyType,
                                 pacUrl = proxyInfo.pacFileUrl,
                                 configPortalPort = ProxyPortManager.CONFIG_PORT
                         )
@@ -356,6 +372,7 @@ data class HomeUiState(
         val httpPort: Int = ProxyPortManager.HTTP_PORT,
         val httpsPort: Int = ProxyPortManager.HTTPS_PORT,
         val socks5Port: Int = ProxyPortManager.SOCKS5_PORT,
+        val proxyType: ProxyType = ProxyType.BOTH,
         val configPortalPort: Int = ProxyPortManager.CONFIG_PORT,
         val pacUrl: String? = null,
         val activeConnections: Int = 0,

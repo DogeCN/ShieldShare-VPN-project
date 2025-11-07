@@ -51,17 +51,32 @@ class TrafficMeterSimple @Inject constructor(
     }
     
     /**
+     * Normalize IP address - extract just the IP part, removing port if present
+     * Handles formats like "192.168.1.1:12345" or "/192.168.1.1:12345" -> "192.168.1.1"
+     */
+    private fun normalizeIpAddress(ipAddress: String): String {
+        // Remove leading "/" if present (from socket.remoteSocketAddress.toString())
+        var normalized = ipAddress.trim().removePrefix("/")
+        // Extract IP part before ":" (removes port)
+        normalized = normalized.substringBefore(":")
+        return normalized.trim()
+    }
+    
+    /**
      * MAIN TRAFFIC RECORDING METHOD - Called by proxy handlers
      */
     override fun recordTraffic(clientIp: String, bytesUp: Long, bytesDown: Long) {
         scope.launch {
             try {
+                // Normalize IP address to extract just the IP (remove port/socket info)
+                val normalizedIp = normalizeIpAddress(clientIp)
+                
                 // Update global counters
                 totalBytesUp.addAndGet(bytesUp)
                 totalBytesDown.addAndGet(bytesDown)
                 
-                // Update or create client stats
-                val currentStats = clientStats[clientIp]
+                // Update or create client stats - use normalized IP as key
+                val currentStats = clientStats[normalizedIp]
                 val updatedStats = if (currentStats != null) {
                     currentStats.copy(
                         totalBytesUp = currentStats.totalBytesUp + bytesUp,
@@ -71,9 +86,9 @@ class TrafficMeterSimple @Inject constructor(
                     )
                 } else {
                     ClientTrafficStats(
-                        clientId = clientIp,
-                        macAddress = resolveMacAddress(clientIp), // Resolve MAC address
-                        ipAddress = clientIp,
+                        clientId = normalizedIp,
+                        macAddress = resolveMacAddress(normalizedIp), // Resolve MAC address
+                        ipAddress = normalizedIp,
                         totalBytesUp = bytesUp,
                         totalBytesDown = bytesDown,
                         lastSeen = System.currentTimeMillis(),
@@ -81,10 +96,10 @@ class TrafficMeterSimple @Inject constructor(
                     )
                 }
                 
-                clientStats[clientIp] = updatedStats
+                clientStats[normalizedIp] = updatedStats
 
-                Log.d(TAG, "Traffic recorded for $clientIp: ↑${bytesUp}B ↓${bytesDown}B")
-                addRawLog("Traffic recorded for $clientIp (${updatedStats.macAddress}): ↑${bytesUp}B ↓${bytesDown}B")
+                Log.d(TAG, "Traffic recorded for $normalizedIp (from $clientIp): ↑${bytesUp}B ↓${bytesDown}B")
+                addRawLog("Traffic recorded for $normalizedIp (${updatedStats.macAddress}): ↑${bytesUp}B ↓${bytesDown}B")
             } catch (e: Exception) {
                 Log.e(TAG, "Error recording traffic for $clientIp", e)
             }
@@ -95,10 +110,11 @@ class TrafficMeterSimple @Inject constructor(
      * START SESSION - Called when new connection starts
      */
     fun startSession(clientIp: String, protocolType: String): String {
+        val normalizedIp = normalizeIpAddress(clientIp)
         val sessionId = UUID.randomUUID().toString()
         val session = TrafficSession(
             sessionId = sessionId,
-            clientIp = clientIp,
+            clientIp = normalizedIp,
             startTime = Date(),
             protocolType = protocolType
         )
@@ -106,7 +122,7 @@ class TrafficMeterSimple @Inject constructor(
         activeSessions[sessionId] = session
         totalConnections.incrementAndGet()
         
-        Log.i(TAG, "Session started: $sessionId for $clientIp ($protocolType)")
+        Log.i(TAG, "Session started: $sessionId for $normalizedIp ($protocolType)")
         return sessionId
     }
     

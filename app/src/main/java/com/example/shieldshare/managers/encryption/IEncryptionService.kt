@@ -6,7 +6,6 @@ import com.example.shieldshare.managers.meter.TrafficStats
 interface IEncryptionService {
     fun encryptForFirebase(data: TrafficStats): EncryptedPayload
     fun decryptFromFirebase(payload: EncryptedPayload): TrafficStats
-    fun encryptDatabase(passphrase: ByteArray)
 }
 
 data class EncryptedPayload(
