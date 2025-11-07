@@ -165,6 +165,7 @@ constructor(
                                             httpPort = config.httpPort,
                                             httpsPort = config.httpsPort,
                                             socks5Port = config.socks5Port,
+                                            proxyType = proxyType,
                                             configPortalPort = ProxyPortManager.CONFIG_PORT,
                                             pacUrl = pacUrl,
                                             uploadSpeed = "0 KB/s",
@@ -265,6 +266,7 @@ constructor(
                                 httpPort = proxyInfo.httpPort,
                                 httpsPort = proxyInfo.httpsPort,
                                 socks5Port = proxyInfo.socks5Port,
+                                proxyType = proxyInfo.proxyType,
                                 pacUrl = proxyInfo.pacFileUrl,
                                 configPortalPort = ProxyPortManager.CONFIG_PORT
                         )
@@ -370,6 +372,7 @@ data class HomeUiState(
         val httpPort: Int = ProxyPortManager.HTTP_PORT,
         val httpsPort: Int = ProxyPortManager.HTTPS_PORT,
         val socks5Port: Int = ProxyPortManager.SOCKS5_PORT,
+        val proxyType: ProxyType = ProxyType.BOTH,
         val configPortalPort: Int = ProxyPortManager.CONFIG_PORT,
         val pacUrl: String? = null,
         val activeConnections: Int = 0,
