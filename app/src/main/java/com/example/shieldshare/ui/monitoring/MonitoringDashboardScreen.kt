@@ -1,11 +1,12 @@
 package com.example.shieldshare.ui.monitoring
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -16,6 +17,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import java.text.SimpleDateFormat
+import java.util.*
 
 @Composable
 fun MonitoringDashboardScreen(
@@ -31,7 +34,6 @@ fun MonitoringDashboardScreen(
             .safeDrawingPadding(),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // System Status Card - moved to top
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -70,7 +72,6 @@ fun MonitoringDashboardScreen(
             }
         }
 
-        // Per-Device Traffic Card
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -93,7 +94,7 @@ fun MonitoringDashboardScreen(
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = "${uiState.trafficStats.size} device${if (uiState.trafficStats.size != 1) "s" else ""}",
+                            text = "${uiState.trafficStats.size} client${if (uiState.trafficStats.size != 1) "s" else ""}",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.primary,
                             fontWeight = FontWeight.Bold
@@ -126,7 +127,6 @@ fun MonitoringDashboardScreen(
                 }
             }
         }
-
     }
 }
 
@@ -162,13 +162,7 @@ private fun DeviceTrafficCard(device: com.example.shieldshare.managers.meter.Cli
     } else 0
     
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(
-                width = 1.dp,
-                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                shape = RoundedCornerShape(8.dp)
-            ),
+        modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant
         ),
@@ -318,4 +312,11 @@ private fun DeviceTrafficCard(device: com.example.shieldshare.managers.meter.Cli
             }
         }
     }
+}
+
+// Helper function to get current time
+@Composable
+private fun getCurrentTime(): String {
+    val formatter = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+    return formatter.format(Date())
 }
