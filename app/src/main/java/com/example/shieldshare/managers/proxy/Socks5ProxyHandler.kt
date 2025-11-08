@@ -252,10 +252,12 @@ class Socks5ProxyHandler(
         withContext(Dispatchers.IO) {
             try {
                 val targetSocket = socketFactory.createSocket()
-                // Use shorter timeout to fail fast
-                targetSocket.connect(InetSocketAddress(host, port), 8000)
-                targetSocket.soTimeout = 20000 // 20 seconds for read operations
+                // Balanced timeouts for concurrent connections
+                targetSocket.connect(InetSocketAddress(host, port), 10000)
+                targetSocket.soTimeout = 30000 // 30 seconds for read operations
                 targetSocket.tcpNoDelay = true // Disable Nagle's algorithm for lower latency
+                targetSocket.receiveBufferSize = 65536 // 64KB
+                targetSocket.sendBufferSize = 65536 // 64KB
 
                 // Send success reply
                 sendConnectionReply(
