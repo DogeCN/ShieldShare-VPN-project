@@ -310,49 +310,62 @@ class HttpProxyHandler(
         Log.i(TAG, "[PERF] Starting tunnels for $host:$port | Client socket: $clientSocketState | Target socket: $targetSocketState")
         
         try {
-            val t1 = scope.launch {
+            // Use coroutineScope to ensure both tunnels are cancelled together if one fails
+            coroutineScope {
+                val t1 = launch {
+                    try {
+                        val uploadStartTime = System.currentTimeMillis()
+                        val uploadThread = Thread.currentThread().name
+                        Log.d(TAG, "[PERF] Starting UPLOAD tunnel for $host:$port | Thread: $uploadThread")
+                        // client -> target (upload)
+                        tunnelData(
+                            input = socket.getInputStream(),
+                            output = targetSocket.getOutputStream(),
+                            isUpload = true
+                        )
+                        val uploadDuration = System.currentTimeMillis() - uploadStartTime
+                        Log.d(TAG, "[PERF] UPLOAD tunnel completed for $host:$port in ${uploadDuration}ms | Thread: $uploadThread")
+                    } catch (e: CancellationException) {
+                        // Normal cancellation - don't log, just rethrow
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error in upload tunnel for $host:$port | Thread: ${Thread.currentThread().name}", e)
+                        throw e
+                    }
+                }
+                val t2 = launch {
+                    try {
+                        val downloadStartTime = System.currentTimeMillis()
+                        val downloadThread = Thread.currentThread().name
+                        Log.d(TAG, "[PERF] Starting DOWNLOAD tunnel for $host:$port | Thread: $downloadThread")
+                        // target -> client (download)
+                        tunnelData(
+                            input = targetSocket.getInputStream(),
+                            output = socket.getOutputStream(),
+                            isUpload = false
+                        )
+                        val downloadDuration = System.currentTimeMillis() - downloadStartTime
+                        Log.d(TAG, "[PERF] DOWNLOAD tunnel completed for $host:$port in ${downloadDuration}ms | Thread: $downloadThread")
+                    } catch (e: CancellationException) {
+                        // Normal cancellation - don't log, just rethrow
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error in download tunnel for $host:$port | Thread: ${Thread.currentThread().name}", e)
+                        throw e
+                    }
+                }
+                
+                // Wait for both tunnels - coroutineScope will cancel both if one fails
+                // This prevents the barrier issue by ensuring proper cancellation propagation
                 try {
-                    val uploadStartTime = System.currentTimeMillis()
-                    val uploadThread = Thread.currentThread().name
-                    Log.d(TAG, "[PERF] Starting UPLOAD tunnel for $host:$port | Thread: $uploadThread")
-                    // client -> target (upload)
-                    tunnelData(
-                        input = socket.getInputStream(),
-                        output = targetSocket.getOutputStream(),
-                        isUpload = true
-                    )
-                    val uploadDuration = System.currentTimeMillis() - uploadStartTime
-                    Log.d(TAG, "[PERF] UPLOAD tunnel completed for $host:$port in ${uploadDuration}ms | Thread: $uploadThread")
+                    t1.join()
+                    t2.join()
                 } catch (e: CancellationException) {
-                    // Normal cancellation
-                    throw e
-                } catch (e: Exception) {
-                    Log.w(TAG, "Error in upload tunnel for $host:$port | Thread: ${Thread.currentThread().name}", e)
+                    // One or both cancelled - coroutineScope handles cleanup
                     throw e
                 }
             }
-            val t2 = scope.launch {
-                try {
-                    val downloadStartTime = System.currentTimeMillis()
-                    val downloadThread = Thread.currentThread().name
-                    Log.d(TAG, "[PERF] Starting DOWNLOAD tunnel for $host:$port | Thread: $downloadThread")
-                    // target -> client (download)
-                    tunnelData(
-                        input = targetSocket.getInputStream(),
-                        output = socket.getOutputStream(),
-                        isUpload = false
-                    )
-                    val downloadDuration = System.currentTimeMillis() - downloadStartTime
-                    Log.d(TAG, "[PERF] DOWNLOAD tunnel completed for $host:$port in ${downloadDuration}ms | Thread: $downloadThread")
-                } catch (e: CancellationException) {
-                    // Normal cancellation
-                    throw e
-                } catch (e: Exception) {
-                    Log.w(TAG, "Error in download tunnel for $host:$port | Thread: ${Thread.currentThread().name}", e)
-                    throw e
-                }
-            }
-            joinAll(t1, t2)
+            
             val totalTunnelDuration = System.currentTimeMillis() - tunnelStartTime
             val totalConnectDuration = System.currentTimeMillis() - connectStartTime
             Log.i(TAG, "[PERF] CONNECT complete: $host:$port | Tunnel: ${totalTunnelDuration}ms | Total: ${totalConnectDuration}ms")
