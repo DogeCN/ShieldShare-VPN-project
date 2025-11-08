@@ -61,6 +61,7 @@ class HttpProxyHandler(
     override fun handleConnectionInternal() {
         scope.launch {
             try {
+                // Wrap entire handler in try-catch to prevent crashes
                 // Validate connection before processing
                 if (socket.isClosed || !socket.isConnected) {
                     Log.w(TAG, "Invalid socket connection, skipping request")
@@ -75,11 +76,11 @@ class HttpProxyHandler(
                 Log.i(TAG, "HTTP session started for client: $clientIp (Session: $sessionId)")
                 
                 // Set socket timeout to prevent hanging connections
-                socket.soTimeout = 15000 // 15 seconds timeout for initial request
+                socket.soTimeout = 30000 // 30 seconds timeout for initial request (increased for better concurrency)
                 
                 // Process requests - handle keep-alive for HTTP, but CONNECT requests close the connection
                 var requestCount = 0
-                val maxRequestsPerConnection = 20 // Lower limit to prevent accumulation
+                val maxRequestsPerConnection = 50 // Increased for better connection reuse
                 var isConnectRequest = false
                 var shouldCloseConnection = false
                 
@@ -93,9 +94,10 @@ class HttpProxyHandler(
                        !shouldCloseConnection && 
                        requestCount < maxRequestsPerConnection) {
                     try {
-                        // For subsequent requests, use a very short timeout to detect idle connections quickly
+                        // For subsequent requests, use a reasonable timeout to detect idle connections
+                        // Increased from 1s to 5s to allow concurrent requests to complete
                         if (requestCount > 0) {
-                            socket.soTimeout = 1000 // 1 second for keep-alive detection - close idle connections fast
+                            socket.soTimeout = 5000 // 5 seconds for keep-alive detection
                         }
                         
                         // Process the request - this will read the request line
@@ -103,7 +105,7 @@ class HttpProxyHandler(
                         val requestResult = handleRequestWithStreams(reader, writer)
                         
                         // Reset timeout for next request processing
-                        socket.soTimeout = 15000
+                        socket.soTimeout = 30000
                         
                         if (requestResult == RequestResult.CONNECT) {
                             // CONNECT request - connection is now dedicated to tunneling
@@ -149,10 +151,22 @@ class HttpProxyHandler(
                 if (requestCount > 0) {
                     Log.d(TAG, "Processed $requestCount request(s) on connection (CONNECT: $isConnectRequest)")
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error in connection handling", e)
-            } finally {
+            } catch (e: CancellationException) {
+                // Normal cancellation, just cleanup
+                Log.d(TAG, "Connection handling cancelled for $clientIp")
                 cleanup()
+            } catch (e: java.net.SocketException) {
+                // Socket errors are expected, just cleanup
+                Log.d(TAG, "Socket exception in connection handling for $clientIp: ${e.message}")
+                cleanup()
+            } catch (e: Exception) {
+                // Log unexpected errors but don't crash
+                Log.e(TAG, "Unexpected error in connection handling for $clientIp", e)
+                try {
+                    cleanup()
+                } catch (cleanupError: Exception) {
+                    Log.e(TAG, "Error during cleanup", cleanupError)
+                }
             }
         }
     }
@@ -233,53 +247,58 @@ class HttpProxyHandler(
                 writer.flush()
                 Log.d(TAG, "Sent 200 Connection Established to client $clientIp for $host:$port")
 
-                // Create target socket via VPN-bound factory
-                Log.d(TAG, "Connecting to target $host:$port...")
-                val targetSocket =
-                        try {
-                            connectTarget(host, port)
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Failed to connect to target $host:$port", e)
-                            throw e
-                        }
-                Log.d(TAG, "Successfully connected to target $host:$port, starting tunnel...")
-
+        // Create target socket via VPN-bound factory
+        val targetSocket = try {
+            connectTarget(host, port)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to create target socket for $host:$port", e)
+            sendErrorResponse(writer, 502, "Bad Gateway - Failed to connect")
+            return@withContext
+        }
+        
+        try {
+            val t1 = scope.launch {
                 try {
-                    val t1 =
-                            scope.launch {
-                                // client -> target (upload)
-                                Log.d(
-                                        TAG,
-                                        "[UPLOAD] Starting tunnel from client to target for $host:$port"
-                                )
-                                tunnelData(
-                                        input = socket.getInputStream(),
-                                        output = targetSocket.getOutputStream(),
-                                        isUpload = true
-                                )
-                            }
-                    val t2 =
-                            scope.launch {
-                                // target -> client (download)
-                                Log.d(
-                                        TAG,
-                                        "[DOWNLOAD] Starting tunnel from target to client for $host:$port"
-                                )
-                                tunnelData(
-                                        input = targetSocket.getInputStream(),
-                                        output = socket.getOutputStream(),
-                                        isUpload = false
-                                )
-                            }
-                    joinAll(t1, t2)
-                    Log.d(TAG, "Tunnel completed for $host:$port")
+                    // client -> target (upload)
+                    tunnelData(
+                        input = socket.getInputStream(),
+                        output = targetSocket.getOutputStream(),
+                        isUpload = true
+                    )
+                } catch (e: CancellationException) {
+                    // Normal cancellation
+                    throw e
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed CONNECT to $host:$port", e)
-                    // If the connection is failed
-                } finally {
-                    safeClose(targetSocket)
+                    Log.w(TAG, "Error in upload tunnel for $host:$port", e)
+                    throw e
                 }
             }
+            val t2 = scope.launch {
+                try {
+                    // target -> client (download)
+                    tunnelData(
+                        input = targetSocket.getInputStream(),
+                        output = socket.getOutputStream(),
+                        isUpload = false
+                    )
+                } catch (e: CancellationException) {
+                    // Normal cancellation
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error in download tunnel for $host:$port", e)
+                    throw e
+                }
+            }
+            joinAll(t1, t2)
+        } catch (e: CancellationException) {
+            // Normal cancellation, just cleanup
+            Log.d(TAG, "Tunnel cancelled for $host:$port")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed CONNECT tunnel to $host:$port", e)
+        } finally {
+            safeClose(targetSocket)
+        }
+    }
 
     /** Plain HTTP proxying (no TLS termination)
      * @return true if connection should close, false if keep-alive is possible */
@@ -349,9 +368,10 @@ class HttpProxyHandler(
         // Forward to target via VPN-bound socket
         val targetSocket = connectTarget(host, port)
         try {
-            val targetOut = BufferedOutputStream(targetSocket.getOutputStream())
-            val targetIn = BufferedInputStream(targetSocket.getInputStream())
-            val clientOut = BufferedOutputStream(socket.getOutputStream())
+            // Use larger buffer sizes for better throughput with concurrent connections
+            val targetOut = BufferedOutputStream(targetSocket.getOutputStream(), 16384) // 16KB buffer
+            val targetIn = BufferedInputStream(targetSocket.getInputStream(), 16384) // 16KB buffer
+            val clientOut = BufferedOutputStream(socket.getOutputStream(), 16384) // 16KB buffer
             val clientIn = socket.getInputStream()
 
             // Send request line + headers
@@ -581,10 +601,13 @@ class HttpProxyHandler(
     private fun connectTarget(host: String, port: Int): Socket {
         Log.d(TAG, "Creating socket via VPN-bound factory for $host:$port")
         return socketFactory.createSocket().apply {
-            // Use shorter timeouts to fail fast and free up resources
-            connect(InetSocketAddress(host, port), /* connect timeout */ 8_000)
-            soTimeout = 20_000 // 20 seconds for read operations
+            // Balanced timeouts - not too short to allow concurrent connections to establish
+            connect(InetSocketAddress(host, port), /* connect timeout */ 10_000)
+            soTimeout = 30_000 // 30 seconds for read operations (increased for concurrent loads)
             tcpNoDelay = true // Disable Nagle's algorithm for lower latency
+            // Set receive buffer size for better throughput
+            receiveBufferSize = 65536 // 64KB
+            sendBufferSize = 65536 // 64KB
         }
     }
 
@@ -611,12 +634,21 @@ class HttpProxyHandler(
         }
 
         // STAGE 2: End traffic session and log summary
-        sessionId?.let { sid -> (trafficMeter as? TrafficMeterSimple)?.endSession(sid) }
+        try {
+            sessionId?.let { sid ->
+                (trafficMeter as? TrafficMeterSimple)?.endSession(sid)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error ending session", e)
+        }
 
         val totalUp = bytesUp.get()
         val totalDown = bytesDown.get()
-        val macAddress =
-                (trafficMeter as? TrafficMeterSimple)?.mapIpToMac()?.get(clientIp) ?: "unknown"
+        val macAddress = try {
+            (trafficMeter as? TrafficMeterSimple)?.mapIpToMac()?.get(clientIp) ?: "unknown"
+        } catch (e: Exception) {
+            "unknown"
+        }
 
         Log.i(TAG, "**HTTP session ended** for $clientIp ($macAddress)")
         Log.i(TAG, "   ↑ **Total Upload**: ${formatBytes(totalUp)}")
@@ -627,8 +659,15 @@ class HttpProxyHandler(
         )
         Log.i(TAG, "   **User Agent**: ${userAgent ?: "Unknown"}")
         
-        // Call traffic callback
-        trafficCallback(totalUp, totalDown)
+        // Call traffic callback - THIS REMOVES THE HANDLER FROM THE MAP
+        // This is critical - the callback must be called to free up the handler slot
+        try {
+            trafficCallback(totalUp, totalDown)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in traffic callback", e)
+            // If callback fails, handler won't be removed - this is a problem
+            // But we can't remove it here because we don't have access to the map
+        }
     }
 
     private fun parseHostPort(url: String): Pair<String?, Int> =

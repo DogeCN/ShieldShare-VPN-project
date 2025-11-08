@@ -33,13 +33,17 @@ class ProxyServerImpl(
     private var socksServerSocket: ServerSocket? = null
     private var webServerSocket: ServerSocket? = null
     private val proxyHandlers = ConcurrentHashMap<String, ProxyHandler>()
+    private val handlerTimestamps = ConcurrentHashMap<String, Long>() // Track when handlers were created
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val clientDetectionScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var currentInstance: ProxyInstance? = null
     
-    // Connection limits to prevent resource exhaustion - more aggressive limits
-    private val MAX_CONCURRENT_HANDLERS = 50 // Maximum concurrent proxy handlers (reduced from 200)
-    private val MAX_HANDLERS_PER_CLIENT = 5 // Maximum handlers per client IP (reduced from 10)
+    // Connection limits to prevent resource exhaustion
+    // Modern browsers open 6-8 concurrent connections per domain, so we need reasonable limits
+    // With 7 pages × 8 connections = 56 connections, we need higher limits
+    private val MAX_CONCURRENT_HANDLERS = 200 // Maximum concurrent proxy handlers (increased for multiple pages)
+    private val MAX_HANDLERS_PER_CLIENT = 60 // Maximum handlers per client IP (increased - browsers use many connections)
+    private val HANDLER_TIMEOUT_MS = 120_000L // 2 minutes - remove handlers that are stuck
 
     private fun createServerSocket(port: Int, hotspotIp: String?): ServerSocket {
         val bindAddress =
@@ -50,8 +54,9 @@ class ProxyServerImpl(
                 }
         return ServerSocket().apply {
             reuseAddress = true
-            soTimeout = 10000 // 10 seconds timeout for accept() - fail faster
-            bind(bindAddress)
+            soTimeout = 30000 // 30 seconds timeout for accept() - allow concurrent connections
+            // Set backlog to allow more pending connections
+            bind(bindAddress, 100) // Allow up to 100 pending connections (increased for concurrent loads)
         }
     }
 
@@ -372,10 +377,10 @@ class ProxyServerImpl(
         // Obtain VPN-aware SocketFactory (if not VPN, will fall back to default unless strict=true)
         val socketFactory = context.vpnAwareSocketFactory(strict = strictVpn)
 
-        // Check connection limits
+        // Check connection limits (with thread-safe counting)
         val activeHandlerCount = proxyHandlers.size
         if (activeHandlerCount >= MAX_CONCURRENT_HANDLERS) {
-            Log.w(TAG, "Maximum concurrent handlers reached ($activeHandlerCount), rejecting new connection from $clientIp")
+            Log.w(TAG, "Maximum concurrent handlers reached ($activeHandlerCount/${MAX_CONCURRENT_HANDLERS}), rejecting new connection from $clientIp")
             try {
                 when (ptype) {
                     ProxyType.SOCKS5 -> sendSocks5GeneralFailure(socket)
@@ -388,10 +393,18 @@ class ProxyServerImpl(
             return
         }
         
-        // Check per-client handler limit
-        val clientHandlers = proxyHandlers.keys.count { it.startsWith("${socket.remoteSocketAddress}_") }
+        // Check per-client handler limit (thread-safe with snapshot)
+        val clientAddressStr = socket.remoteSocketAddress.toString()
+        val clientHandlers = try {
+            // Create snapshot to avoid concurrent modification
+            proxyHandlers.keys.toList().count { it.startsWith(clientAddressStr) }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error counting client handlers, allowing connection", e)
+            0 // Allow connection if counting fails
+        }
+        
         if (clientHandlers >= MAX_HANDLERS_PER_CLIENT) {
-            Log.w(TAG, "Maximum handlers per client reached ($clientHandlers) for $clientIp, rejecting new connection")
+            Log.w(TAG, "Maximum handlers per client reached ($clientHandlers/${MAX_HANDLERS_PER_CLIENT}) for $clientIp, rejecting new connection. Total handlers: $activeHandlerCount")
             try {
                 when (ptype) {
                     ProxyType.SOCKS5 -> sendSocks5GeneralFailure(socket)
@@ -403,56 +416,107 @@ class ProxyServerImpl(
             }
             return
         }
+        
+        // Log when we're getting close to limits for debugging
+        if (activeHandlerCount > MAX_CONCURRENT_HANDLERS * 0.7) {
+            Log.d(TAG, "Handler count is high: $activeHandlerCount/${MAX_CONCURRENT_HANDLERS}, client $clientIp has $clientHandlers handlers")
+        }
 
         // Create appropriate handler
-        val handler: ProxyHandler =
-                when (ptype) {
-                    ProxyType.HTTP_HTTPS ->
-                            HttpProxyHandler(
-                                    clientSocket = socket,
-                                    trafficMeter = trafficMeter,
-                                    socketFactory = socketFactory,
-                                    inOverride = inOverride
-                            ) { bytesUp, bytesDown ->
-                                trafficMeter.recordTraffic(
-                                        socket.remoteSocketAddress.toString(),
-                                        bytesUp,
-                                        bytesDown
-                                )
-                                proxyHandlers.remove(clientId)
-                            }
-                    ProxyType.SOCKS5 ->
-                            Socks5ProxyHandler(
-                                    clientSocket = socket,
-                                    trafficMeter = trafficMeter,
-                                    socketFactory = socketFactory,
-                                    inOverride = inOverride
-                            ) { bytesUp, bytesDown ->
-                                trafficMeter.recordTraffic(
-                                        socket.remoteSocketAddress.toString(),
-                                        bytesUp,
-                                        bytesDown
-                                )
-                                proxyHandlers.remove(clientId)
-                            }
-                    else -> {
-                        // Should not happen
-                        safeClose(socket)
-                        return
+        val handler: ProxyHandler = when (ptype) {
+            ProxyType.HTTP_HTTPS ->
+                HttpProxyHandler(
+                    clientSocket = socket,
+                    trafficMeter = trafficMeter,
+                    socketFactory = socketFactory,
+                    inOverride = inOverride
+                ) { bytesUp, bytesDown ->
+                    try {
+                        trafficMeter.recordTraffic(
+                            socket.remoteSocketAddress.toString(),
+                            bytesUp,
+                            bytesDown
+                        )
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error recording traffic", e)
                     }
+                    // Always remove handler when callback is called
+                    proxyHandlers.remove(clientId)
+                    handlerTimestamps.remove(clientId)
+                    Log.d(TAG, "Handler removed via callback: $clientId (Remaining: ${proxyHandlers.size})")
                 }
 
+            ProxyType.SOCKS5 ->
+                Socks5ProxyHandler(
+                    clientSocket = socket,
+                    trafficMeter = trafficMeter,
+                    socketFactory = socketFactory,
+                    inOverride = inOverride
+                ) { bytesUp, bytesDown ->
+                    try {
+                        trafficMeter.recordTraffic(
+                            socket.remoteSocketAddress.toString(),
+                            bytesUp,
+                            bytesDown
+                        )
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error recording traffic", e)
+                    }
+                    // Always remove handler when callback is called
+                    proxyHandlers.remove(clientId)
+                    handlerTimestamps.remove(clientId)
+                    Log.d(TAG, "Handler removed via callback: $clientId (Remaining: ${proxyHandlers.size})")
+                }
+
+            else -> {
+                // Should not happen
+                safeClose(socket)
+                return
+            }
+        }
         proxyHandlers[clientId] = handler
+        handlerTimestamps[clientId] = System.currentTimeMillis()
         Log.d(TAG, "Created handler $clientId (Total handlers: ${proxyHandlers.size}, Client handlers: $clientHandlers)")
 
-        // Start the handler in a coroutine
+        // Start the handler in a coroutine with proper exception handling
         serviceScope.launch {
             try {
                 handler.handleConnection()
-            } catch (e: Exception) {
-                Log.e(TAG, "Error handling client connection", e)
+                // Handler should remove itself via callback, but ensure it's removed if callback wasn't called
+                // This is a safety net - the callback should handle removal
+            } catch (e: CancellationException) {
+                // Normal cancellation, ensure handler is removed
+                Log.d(TAG, "Handler cancelled for $clientId")
                 proxyHandlers.remove(clientId)
-                safeClose(socket)
+                handlerTimestamps.remove(clientId)
+                Log.d(TAG, "Handler removed after cancellation: $clientId (Remaining: ${proxyHandlers.size})")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error handling client connection for $clientId", e)
+                // Ensure cleanup happens even on error - handler MUST be removed
+                try {
+                    val removed = proxyHandlers.remove(clientId)
+                    handlerTimestamps.remove(clientId)
+                    if (removed != null) {
+                        Log.d(TAG, "Handler removed after error: $clientId (Remaining: ${proxyHandlers.size})")
+                    } else {
+                        Log.w(TAG, "Handler $clientId was already removed")
+                    }
+                } catch (cleanupError: Exception) {
+                    Log.e(TAG, "Error removing handler from map", cleanupError)
+                }
+                try {
+                    safeClose(socket)
+                } catch (closeError: Exception) {
+                    Log.e(TAG, "Error closing socket", closeError)
+                }
+            } finally {
+                // Final safety net - ensure handler is removed even if everything else fails
+                // Only remove if still present (callback might have already removed it)
+                if (proxyHandlers.containsKey(clientId)) {
+                    proxyHandlers.remove(clientId)
+                    handlerTimestamps.remove(clientId)
+                    Log.w(TAG, "Handler $clientId removed in finally block (safety net)")
+                }
             }
         }
     }
@@ -853,21 +917,34 @@ function isLocalNetwork(host) {
                     if (handlerCount > 0) {
                         Log.d(TAG, "Active proxy handlers: $handlerCount")
                         
-                        // Remove handlers for closed sockets
+                        val currentTime = System.currentTimeMillis()
                         val iterator = proxyHandlers.iterator()
                         var removedCount = 0
+                        
                         while (iterator.hasNext()) {
                             val (clientId, handler) = iterator.next()
                             try {
+                                // Check if handler has timed out (stuck for too long)
+                                val timestamp = handlerTimestamps[clientId]
+                                val isTimedOut = timestamp != null && (currentTime - timestamp) > HANDLER_TIMEOUT_MS
+                                
                                 // Check if the handler's socket is still valid
-                                if (!handler.isSocketValid()) {
+                                val isValid = handler.isSocketValid()
+                                
+                                if (isTimedOut || !isValid) {
                                     iterator.remove()
+                                    handlerTimestamps.remove(clientId)
                                     removedCount++
-                                    Log.d(TAG, "Removed stale handler: $clientId")
+                                    if (isTimedOut) {
+                                        Log.w(TAG, "Removed timed-out handler: $clientId (age: ${(currentTime - timestamp!!) / 1000}s)")
+                                    } else {
+                                        Log.d(TAG, "Removed stale handler: $clientId")
+                                    }
                                 }
                             } catch (e: Exception) {
                                 // Handler or socket might be in invalid state, remove it
                                 iterator.remove()
+                                handlerTimestamps.remove(clientId)
                                 removedCount++
                                 Log.d(TAG, "Removed invalid handler: $clientId (${e.message})")
                             }
@@ -877,21 +954,26 @@ function isLocalNetwork(host) {
                             Log.i(TAG, "Cleaned up $removedCount stale handler(s), remaining: ${proxyHandlers.size}")
                         }
                         
-                        // If we're approaching the limit, be more aggressive about closing connections
-                        if (handlerCount > MAX_CONCURRENT_HANDLERS * 0.8) {
-                            Log.w(TAG, "Handler count is high ($handlerCount), closing idle connections aggressively")
-                            // Close handlers with closed/invalid sockets immediately
+                        // If we're approaching the limit (90% instead of 80%), be more aggressive about closing connections
+                        // Only clean up invalid sockets, don't close active connections
+                        if (handlerCount > MAX_CONCURRENT_HANDLERS * 0.9) {
+                            Log.w(TAG, "Handler count is very high ($handlerCount/${MAX_CONCURRENT_HANDLERS}), cleaning up invalid handlers")
+                            // Only close handlers with closed/invalid sockets - don't close active ones
                             val iterator2 = proxyHandlers.iterator()
                             var forceRemoved = 0
                             while (iterator2.hasNext()) {
                                 val (clientId2, handler2) = iterator2.next()
                                 try {
+                                    // Only remove if socket is definitely invalid
                                     if (!handler2.isSocketValid()) {
                                         iterator2.remove()
+                                        handlerTimestamps.remove(clientId2)
                                         forceRemoved++
                                     }
                                 } catch (e: Exception) {
+                                    // Remove invalid handlers
                                     iterator2.remove()
+                                    handlerTimestamps.remove(clientId2)
                                     forceRemoved++
                                 }
                             }
