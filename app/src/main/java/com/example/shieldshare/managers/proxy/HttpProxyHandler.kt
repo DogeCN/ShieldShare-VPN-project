@@ -285,11 +285,36 @@ class HttpProxyHandler(
         Log.i(TAG, "[PERF] Target connected: $host:$port | Connect time: ${connectDuration}ms")
         
         val tunnelStartTime = System.currentTimeMillis()
+        // Set shorter timeout for tunneling to fail fast on stuck connections
+        // Use 5 seconds - if no data arrives in 5s, the connection is likely stuck
+        val originalClientTimeout = try { socket.soTimeout } catch (e: Exception) { 0 }
+        val originalTargetTimeout = try { targetSocket.soTimeout } catch (e: Exception) { 0 }
+        try {
+            socket.soTimeout = 5000 // 5 seconds - fail fast on stuck client connections
+            targetSocket.soTimeout = 5000 // 5 seconds - fail fast on stuck target connections
+        } catch (e: Exception) {
+            Log.w(TAG, "Error setting socket timeouts for tunneling", e)
+        }
+        
+        // Log socket states before starting tunnels
+        val clientSocketState = try {
+            "connected=${socket.isConnected}, closed=${socket.isClosed}, timeout=${socket.soTimeout}, tcpNoDelay=${socket.tcpNoDelay}, recvBuf=${socket.receiveBufferSize}, sendBuf=${socket.sendBufferSize}"
+        } catch (e: Exception) {
+            "error: ${e.message}"
+        }
+        val targetSocketState = try {
+            "connected=${targetSocket.isConnected}, closed=${targetSocket.isClosed}, timeout=${targetSocket.soTimeout}, tcpNoDelay=${targetSocket.tcpNoDelay}, recvBuf=${targetSocket.receiveBufferSize}, sendBuf=${targetSocket.sendBufferSize}"
+        } catch (e: Exception) {
+            "error: ${e.message}"
+        }
+        Log.i(TAG, "[PERF] Starting tunnels for $host:$port | Client socket: $clientSocketState | Target socket: $targetSocketState")
+        
         try {
             val t1 = scope.launch {
                 try {
                     val uploadStartTime = System.currentTimeMillis()
-                    Log.d(TAG, "[PERF] Starting UPLOAD tunnel for $host:$port")
+                    val uploadThread = Thread.currentThread().name
+                    Log.d(TAG, "[PERF] Starting UPLOAD tunnel for $host:$port | Thread: $uploadThread")
                     // client -> target (upload)
                     tunnelData(
                         input = socket.getInputStream(),
@@ -297,19 +322,20 @@ class HttpProxyHandler(
                         isUpload = true
                     )
                     val uploadDuration = System.currentTimeMillis() - uploadStartTime
-                    Log.d(TAG, "[PERF] UPLOAD tunnel completed for $host:$port in ${uploadDuration}ms")
+                    Log.d(TAG, "[PERF] UPLOAD tunnel completed for $host:$port in ${uploadDuration}ms | Thread: $uploadThread")
                 } catch (e: CancellationException) {
                     // Normal cancellation
                     throw e
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error in upload tunnel for $host:$port", e)
+                    Log.w(TAG, "Error in upload tunnel for $host:$port | Thread: ${Thread.currentThread().name}", e)
                     throw e
                 }
             }
             val t2 = scope.launch {
                 try {
                     val downloadStartTime = System.currentTimeMillis()
-                    Log.d(TAG, "[PERF] Starting DOWNLOAD tunnel for $host:$port")
+                    val downloadThread = Thread.currentThread().name
+                    Log.d(TAG, "[PERF] Starting DOWNLOAD tunnel for $host:$port | Thread: $downloadThread")
                     // target -> client (download)
                     tunnelData(
                         input = targetSocket.getInputStream(),
@@ -317,12 +343,12 @@ class HttpProxyHandler(
                         isUpload = false
                     )
                     val downloadDuration = System.currentTimeMillis() - downloadStartTime
-                    Log.d(TAG, "[PERF] DOWNLOAD tunnel completed for $host:$port in ${downloadDuration}ms")
+                    Log.d(TAG, "[PERF] DOWNLOAD tunnel completed for $host:$port in ${downloadDuration}ms | Thread: $downloadThread")
                 } catch (e: CancellationException) {
                     // Normal cancellation
                     throw e
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error in download tunnel for $host:$port", e)
+                    Log.w(TAG, "Error in download tunnel for $host:$port | Thread: ${Thread.currentThread().name}", e)
                     throw e
                 }
             }
@@ -336,6 +362,17 @@ class HttpProxyHandler(
         } catch (e: Exception) {
             Log.e(TAG, "Failed CONNECT tunnel to $host:$port", e)
         } finally {
+            // Restore original socket timeouts
+            try {
+                socket.soTimeout = originalClientTimeout
+            } catch (e: Exception) {
+                // Ignore
+            }
+            try {
+                targetSocket.soTimeout = originalTargetTimeout
+            } catch (e: Exception) {
+                // Ignore
+            }
             safeClose(targetSocket)
         }
     }
@@ -560,59 +597,48 @@ class HttpProxyHandler(
         var flushCounter = 0
         var readCount = 0
         var lastLogTime = System.currentTimeMillis()
+        val threadName = Thread.currentThread().name
         try {
             while (true) {
                 try {
-                    val readStartTime = System.currentTimeMillis()
                     val n = input.read(buffer)
-                    val readDuration = System.currentTimeMillis() - readStartTime
-                    if (n <= 0) break
+                    
+                    if (n <= 0) {
+                        break
+                    }
                     
                     readCount++
                     total += n
                     
-                    // Log progress every 2 seconds or every 100 reads
+                    // Reduced logging - only log progress every 5 seconds or every 500 reads
                     val currentTime = System.currentTimeMillis()
-                    if (currentTime - lastLogTime > 2000 || readCount % 100 == 0) {
+                    if (currentTime - lastLogTime > 5000 || readCount % 500 == 0) {
                         val elapsed = currentTime - tunnelStartTime
                         val speed = if (elapsed > 0) (total * 1000 / elapsed / 1024) else 0
-                        Log.d(TAG, "[PERF] Tunnel ${if (isUpload) "UPLOAD" else "DOWNLOAD"} progress: ${total} bytes, ${readCount} reads, ${elapsed}ms, ${speed} KB/s, last read: ${readDuration}ms")
+                        Log.d(TAG, "[PERF] Tunnel ${if (isUpload) "UPLOAD" else "DOWNLOAD"} progress: ${total} bytes, ${readCount} reads, ${elapsed}ms, ${speed} KB/s")
                         lastLogTime = currentTime
                     }
                     
-                    // Log if read takes too long
-                    if (readDuration > 1000) {
-                        Log.w(TAG, "[PERF] Slow read detected: ${readDuration}ms for ${n} bytes in ${if (isUpload) "UPLOAD" else "DOWNLOAD"}")
-                    }
-                    
                     try {
-                        val writeStartTime = System.currentTimeMillis()
                         forwardThroughVpn(buffer, n, output)
-                        val writeDuration = System.currentTimeMillis() - writeStartTime
-                        
-                        // Log if write takes too long
-                        if (writeDuration > 100) {
-                            Log.w(TAG, "[PERF] Slow write detected: ${writeDuration}ms for ${n} bytes in ${if (isUpload) "UPLOAD" else "DOWNLOAD"}")
-                        }
                         
                         // Flush every 4 reads for better performance
                         flushCounter++
                         if (flushCounter >= 4) {
-                            val flushStartTime = System.currentTimeMillis()
                             output.flush()
-                            val flushDuration = System.currentTimeMillis() - flushStartTime
-                            if (flushDuration > 50) {
-                                Log.w(TAG, "[PERF] Slow flush detected: ${flushDuration}ms")
-                            }
                             flushCounter = 0
                         }
                     } catch (e: SocketException) {
-                        Log.w(TAG, "Connection reset during VPN forward: ${e.message}")
                         break
                     } catch (e: IOException) {
-                        Log.w(TAG, "IO error during VPN forward: ${e.message}")
                         break
                     }
+                } catch (e: java.net.SocketTimeoutException) {
+                    // Timeout on read - connection is idle or stuck
+                    // For tunneling, if we timeout, close this direction
+                    // The other direction may still be active
+                    Log.d(TAG, "[PERF] Read timeout in ${if (isUpload) "UPLOAD" else "DOWNLOAD"} tunnel after ${System.currentTimeMillis() - tunnelStartTime}ms - closing direction")
+                    break
                 } catch (e: SocketException) {
                     Log.w(TAG, "Connection reset during data tunneling: ${e.message}")
                     break
@@ -681,7 +707,9 @@ class HttpProxyHandler(
             // Optimize for concurrent connections - faster connect timeout
             // Multiple connections can establish in parallel
             connect(InetSocketAddress(host, port), /* connect timeout */ 8_000)
-            soTimeout = 30_000 // 30 seconds for read operations
+            // Note: soTimeout will be set to 5s during tunneling for faster failure detection
+            // Initial timeout is longer for connection establishment
+            soTimeout = 10_000 // 10 seconds initially - will be reduced to 5s during tunneling
             tcpNoDelay = true // Disable Nagle's algorithm for lower latency
             // Set receive buffer size for better throughput
             receiveBufferSize = 131072 // 128KB for better concurrent performance
