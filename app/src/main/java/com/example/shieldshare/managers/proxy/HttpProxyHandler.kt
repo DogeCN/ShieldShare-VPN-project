@@ -25,7 +25,7 @@ class HttpProxyHandler(
 ) : ProxyHandler(clientSocket, trafficMeter) {
     companion object {
         private const val TAG = "HttpProxyHandler"
-        private const val BUFFER_SIZE = 8192
+        private const val BUFFER_SIZE = 65536 // 64KB buffer for better throughput (increased from 8KB)
         private const val CONNECT_METHOD = "CONNECT"
         private const val HTTP_VERSION = "HTTP/1.1"
     }
@@ -59,6 +59,7 @@ class HttpProxyHandler(
 
     /** If your base class calls this, keep it delegating to the same request handler. */
     override fun handleConnectionInternal() {
+        val handlerStartTime = System.currentTimeMillis()
         scope.launch {
             try {
                 // Wrap entire handler in try-catch to prevent crashes
@@ -69,14 +70,27 @@ class HttpProxyHandler(
                 }
                 
                 // STAGE 2: Start traffic session
+                val sessionStartTime = System.currentTimeMillis()
                 sessionId = (trafficMeter as? TrafficMeterSimple)?.startSession(
                     clientIp = clientIp,
                     protocolType = "HTTP"
                 )
-                Log.i(TAG, "HTTP session started for client: $clientIp (Session: $sessionId)")
+                val sessionDuration = System.currentTimeMillis() - sessionStartTime
+                Log.i(TAG, "[PERF] HTTP handler START: $clientIp | Session: $sessionId | Setup: ${sessionDuration}ms | Time: $handlerStartTime")
+                
+                // Optimize client socket for better performance - same optimizations as target socket
+                try {
+                    socket.tcpNoDelay = true // Disable Nagle's algorithm for lower latency
+                    socket.receiveBufferSize = 131072 // 128KB for better throughput
+                    socket.sendBufferSize = 131072 // 128KB for better throughput
+                    socket.keepAlive = true // Enable keep-alive for connection reuse
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error optimizing client socket", e)
+                }
                 
                 // Set socket timeout to prevent hanging connections
-                socket.soTimeout = 30000 // 30 seconds timeout for initial request (increased for better concurrency)
+                // Reduced from 30s to 10s for faster failure detection - if client doesn't send data quickly, fail fast
+                socket.soTimeout = 10000 // 10 seconds timeout for initial request - fail fast for slow/stuck connections
                 
                 // Process requests - handle keep-alive for HTTP, but CONNECT requests close the connection
                 var requestCount = 0
@@ -94,15 +108,18 @@ class HttpProxyHandler(
                        !shouldCloseConnection && 
                        requestCount < maxRequestsPerConnection) {
                     try {
+                        val requestStartTime = System.currentTimeMillis()
                         // For subsequent requests, use a reasonable timeout to detect idle connections
-                        // Increased from 1s to 5s to allow concurrent requests to complete
+                        // Increased to 10s to allow concurrent requests to complete without premature timeouts
                         if (requestCount > 0) {
-                            socket.soTimeout = 5000 // 5 seconds for keep-alive detection
+                            socket.soTimeout = 10000 // 10 seconds for keep-alive detection
                         }
                         
                         // Process the request - this will read the request line
                         // If no data is available, it will timeout
                         val requestResult = handleRequestWithStreams(reader, writer)
+                        val requestDuration = System.currentTimeMillis() - requestStartTime
+                        Log.i(TAG, "[PERF] Request #${requestCount + 1} processed: $requestResult | Duration: ${requestDuration}ms")
                         
                         // Reset timeout for next request processing
                         socket.soTimeout = 30000
@@ -192,16 +209,20 @@ class HttpProxyHandler(
         writer: PrintWriter
     ): RequestResult = withContext(Dispatchers.IO) {
         // Read the first request line with timeout handling
+        val readStartTime = System.currentTimeMillis()
         val requestLine = try {
             reader.readLine() ?: return@withContext RequestResult.ERROR
         } catch (e: java.net.SocketTimeoutException) {
-            Log.d(TAG, "Timeout reading request line")
+            val readDuration = System.currentTimeMillis() - readStartTime
+            Log.d(TAG, "[PERF] Timeout reading request line after ${readDuration}ms")
             return@withContext RequestResult.ERROR
         } catch (e: Exception) {
-            Log.d(TAG, "Error reading request line: ${e.message}")
+            val readDuration = System.currentTimeMillis() - readStartTime
+            Log.d(TAG, "[PERF] Error reading request line after ${readDuration}ms: ${e.message}")
             return@withContext RequestResult.ERROR
         }
-        Log.d(TAG, "Proxy request: $requestLine")
+        val readDuration = System.currentTimeMillis() - readStartTime
+        Log.d(TAG, "[PERF] Request line read: $requestLine | Read time: ${readDuration}ms")
 
         val parts = requestLine.split(" ")
         if (parts.size < 3) {
@@ -227,44 +248,56 @@ class HttpProxyHandler(
         writer: PrintWriter,
         url: String
     ) = withContext(Dispatchers.IO) {
-                Log.i(TAG, "HTTPS CONNECT request to: $url from $clientIp")
+        val connectStartTime = System.currentTimeMillis()
+        Log.i(TAG, "[PERF] HTTPS CONNECT START: $url from $clientIp | Time: $connectStartTime")
 
-                val (host, port) = parseHostPort(url)
-                if (host == null || port == -1) {
-                    sendErrorResponse(writer, 400, "Bad Request - Invalid host:port")
-                    return@withContext
-                }
+        val (host, port) = parseHostPort(url)
+        if (host == null || port == -1) {
+            sendErrorResponse(writer, 400, "Bad Request - Invalid host:port")
+            return@withContext
+        }
 
-                // Track target host for session
-                hostsAccessed.add(host)
-                // (trafficMeter as? TrafficMeterSimple)?.updateSessionTarget(sessionId, host) //
-                // 如果你实现了的话
+        // Track target host for session
+        hostsAccessed.add(host)
+        // (trafficMeter as? TrafficMeterSimple)?.updateSessionTarget(sessionId, host) //
+        // 如果你实现了的话
 
-                // 200 Established, then raw tunnel
-                writer.println("$HTTP_VERSION 200 Connection Established")
-                writer.println("Proxy-Agent: ShieldShare/1.0")
-                writer.println()
-                writer.flush()
-                Log.d(TAG, "Sent 200 Connection Established to client $clientIp for $host:$port")
+        // 200 Established, then raw tunnel
+        val responseStartTime = System.currentTimeMillis()
+        writer.println("$HTTP_VERSION 200 Connection Established")
+        writer.println("Proxy-Agent: ShieldShare/1.0")
+        writer.println()
+        writer.flush()
+        val responseDuration = System.currentTimeMillis() - responseStartTime
+        Log.d(TAG, "[PERF] CONNECT response sent: ${responseDuration}ms")
 
         // Create target socket via VPN-bound factory
+        val connectTargetStartTime = System.currentTimeMillis()
         val targetSocket = try {
             connectTarget(host, port)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to create target socket for $host:$port", e)
+            val connectDuration = System.currentTimeMillis() - connectTargetStartTime
+            Log.e(TAG, "[PERF] Failed to connect target $host:$port after ${connectDuration}ms", e)
             sendErrorResponse(writer, 502, "Bad Gateway - Failed to connect")
             return@withContext
         }
+        val connectDuration = System.currentTimeMillis() - connectTargetStartTime
+        Log.i(TAG, "[PERF] Target connected: $host:$port | Connect time: ${connectDuration}ms")
         
+        val tunnelStartTime = System.currentTimeMillis()
         try {
             val t1 = scope.launch {
                 try {
+                    val uploadStartTime = System.currentTimeMillis()
+                    Log.d(TAG, "[PERF] Starting UPLOAD tunnel for $host:$port")
                     // client -> target (upload)
                     tunnelData(
                         input = socket.getInputStream(),
                         output = targetSocket.getOutputStream(),
                         isUpload = true
                     )
+                    val uploadDuration = System.currentTimeMillis() - uploadStartTime
+                    Log.d(TAG, "[PERF] UPLOAD tunnel completed for $host:$port in ${uploadDuration}ms")
                 } catch (e: CancellationException) {
                     // Normal cancellation
                     throw e
@@ -275,12 +308,16 @@ class HttpProxyHandler(
             }
             val t2 = scope.launch {
                 try {
+                    val downloadStartTime = System.currentTimeMillis()
+                    Log.d(TAG, "[PERF] Starting DOWNLOAD tunnel for $host:$port")
                     // target -> client (download)
                     tunnelData(
                         input = targetSocket.getInputStream(),
                         output = socket.getOutputStream(),
                         isUpload = false
                     )
+                    val downloadDuration = System.currentTimeMillis() - downloadStartTime
+                    Log.d(TAG, "[PERF] DOWNLOAD tunnel completed for $host:$port in ${downloadDuration}ms")
                 } catch (e: CancellationException) {
                     // Normal cancellation
                     throw e
@@ -290,6 +327,9 @@ class HttpProxyHandler(
                 }
             }
             joinAll(t1, t2)
+            val totalTunnelDuration = System.currentTimeMillis() - tunnelStartTime
+            val totalConnectDuration = System.currentTimeMillis() - connectStartTime
+            Log.i(TAG, "[PERF] CONNECT complete: $host:$port | Tunnel: ${totalTunnelDuration}ms | Total: ${totalConnectDuration}ms")
         } catch (e: CancellationException) {
             // Normal cancellation, just cleanup
             Log.d(TAG, "Tunnel cancelled for $host:$port")
@@ -308,7 +348,8 @@ class HttpProxyHandler(
         method: String,
         url: String
     ): Boolean = withContext(Dispatchers.IO) {
-        Log.d(TAG, "Handling HTTP request: $method $url")
+        val requestStartTime = System.currentTimeMillis()
+        Log.i(TAG, "[PERF] HTTP request START: $method $url | Time: $requestStartTime")
 
         // Read all headers (text-mode)
         val headers = mutableListOf<String>()
@@ -366,12 +407,15 @@ class HttpProxyHandler(
         val preface = sb.toString().toByteArray(Charsets.US_ASCII)
 
         // Forward to target via VPN-bound socket
+        val connectStartTime = System.currentTimeMillis()
         val targetSocket = connectTarget(host, port)
+        val connectDuration = System.currentTimeMillis() - connectStartTime
+        Log.i(TAG, "[PERF] HTTP target connected: $host:$port | Connect time: ${connectDuration}ms")
         try {
             // Use larger buffer sizes for better throughput with concurrent connections
-            val targetOut = BufferedOutputStream(targetSocket.getOutputStream(), 16384) // 16KB buffer
-            val targetIn = BufferedInputStream(targetSocket.getInputStream(), 16384) // 16KB buffer
-            val clientOut = BufferedOutputStream(socket.getOutputStream(), 16384) // 16KB buffer
+            val targetOut = BufferedOutputStream(targetSocket.getOutputStream(), 65536) // 64KB buffer
+            val targetIn = BufferedInputStream(targetSocket.getInputStream(), 65536) // 64KB buffer
+            val clientOut = BufferedOutputStream(socket.getOutputStream(), 65536) // 64KB buffer
             val clientIn = socket.getInputStream()
 
             // Send request line + headers
@@ -411,6 +455,7 @@ class HttpProxyHandler(
 
             // Stream response bytes back to client only if connection is still ok
             var totalDown = 0L
+            var flushCounter = 0
             if (connectionOk) {
                 val buffer = ByteArray(BUFFER_SIZE)
                 try {
@@ -437,6 +482,14 @@ class HttpProxyHandler(
                         try {
                             clientOut.write(buffer, 0, n)
                             totalDown += n
+                            
+                            // Flush every 4 reads (256KB) instead of every read for better performance
+                            // Only flush frequently for small responses, less frequently for large ones
+                            flushCounter++
+                            if (flushCounter >= 4 || totalDown < 65536) {
+                                clientOut.flush()
+                                flushCounter = 0
+                            }
                         } catch (e: SocketException) {
                             Log.w(
                                     TAG,
@@ -451,7 +504,8 @@ class HttpProxyHandler(
                             break
                         }
                     }
-
+                    
+                    // Final flush
                     try {
                         clientOut.flush()
                     } catch (e: SocketException) {
@@ -460,10 +514,14 @@ class HttpProxyHandler(
                         Log.w(TAG, "IO error during response flush: ${e.message}")
                     }
                 } finally {
-                    // traffic accounting (include request body in upload)
-                    bytesUp.addAndGet(totalUp)
-                    bytesDown.addAndGet(totalDown)
-                    trafficMeter.recordTraffic(clientIp, totalUp, totalDown)
+                    // traffic accounting (include request body in upload) - do this asynchronously to not block
+                    val finalUp = totalUp
+                    val finalDown = totalDown
+                    scope.launch {
+                        bytesUp.addAndGet(finalUp)
+                        bytesDown.addAndGet(finalDown)
+                        trafficMeter.recordTraffic(clientIp, finalUp, finalDown)
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -479,6 +537,8 @@ class HttpProxyHandler(
             return@withContext true // Close connection on error
         } finally {
             safeClose(targetSocket)
+            val requestDuration = System.currentTimeMillis() - requestStartTime
+            Log.i(TAG, "[PERF] HTTP request COMPLETE: $method $url | Total duration: ${requestDuration}ms")
         }
         
         // Return whether connection should close
@@ -489,94 +549,111 @@ class HttpProxyHandler(
      * Copy bytes from input to output. If isUpload = true, bytes are accounted as client -> target
      * (↑). If false, as target -> client (↓).
      */
-    private suspend fun tunnelData(input: InputStream, output: OutputStream, isUpload: Boolean) =
-            withContext(Dispatchers.IO) {
-                val buffer = ByteArray(BUFFER_SIZE)
-                var total = 0L
-                val direction = if (isUpload) "[UPLOAD]" else "[DOWNLOAD]"
+    private suspend fun tunnelData(
+        input: InputStream,
+        output: OutputStream,
+        isUpload: Boolean
+    ) = withContext(Dispatchers.IO) {
+        val tunnelStartTime = System.currentTimeMillis()
+        val buffer = ByteArray(BUFFER_SIZE)
+        var total = 0L
+        var flushCounter = 0
+        var readCount = 0
+        var lastLogTime = System.currentTimeMillis()
+        try {
+            while (true) {
                 try {
-                    Log.d(TAG, "$direction Starting data tunnel, waiting for data...")
-                    var readAttempts = 0
-                    while (true) {
-                        try {
-                            readAttempts++
-                            if (readAttempts == 1) {
-                                Log.d(TAG, "$direction First read attempt...")
-                            }
-                            val n = input.read(buffer)
-                            if (n <= 0) {
-                                if (n == -1) {
-                                    Log.d(
-                                            TAG,
-                                            "$direction Stream closed (EOF), total bytes: $total"
-                                    )
-                                } else {
-                                    Log.d(
-                                            TAG,
-                                            "$direction Read 0 bytes, breaking loop, total bytes: $total"
-                                    )
-                                }
-                                break
-                            }
-
-                            if (readAttempts == 1) {
-                                Log.d(TAG, "$direction First data chunk received: $n bytes")
-                            }
-
-                            try {
-                                forwardThroughVpn(buffer, n, output)
-                                total += n
-                                if (total % 8192 == 0L && total > 0) {
-                                    Log.d(TAG, "$direction Progress: $total bytes transferred")
-                                }
-                            } catch (e: SocketException) {
-                                Log.w(
-                                        TAG,
-                                        "$direction Connection reset during VPN forward: ${e.message}"
-                                )
-                                break
-                            } catch (e: IOException) {
-                                Log.w(TAG, "$direction IO error during VPN forward: ${e.message}")
-                                break
-                            }
-                        } catch (e: SocketException) {
-                            Log.w(
-                                    TAG,
-                                    "$direction Connection reset during data tunneling: ${e.message}"
-                            )
-                            break // Exit the loop on connection reset
-                        } catch (e: IOException) {
-                            Log.w(TAG, "$direction Error reading data: ${e.message}")
-                            break // Exit the loop on I/O errors
-                        } catch (e: Exception) {
-                            Log.e(TAG, "$direction Unexpected error during read: ${e.message}", e)
-                            break
-                        }
+                    val readStartTime = System.currentTimeMillis()
+                    val n = input.read(buffer)
+                    val readDuration = System.currentTimeMillis() - readStartTime
+                    if (n <= 0) break
+                    
+                    readCount++
+                    total += n
+                    
+                    // Log progress every 2 seconds or every 100 reads
+                    val currentTime = System.currentTimeMillis()
+                    if (currentTime - lastLogTime > 2000 || readCount % 100 == 0) {
+                        val elapsed = currentTime - tunnelStartTime
+                        val speed = if (elapsed > 0) (total * 1000 / elapsed / 1024) else 0
+                        Log.d(TAG, "[PERF] Tunnel ${if (isUpload) "UPLOAD" else "DOWNLOAD"} progress: ${total} bytes, ${readCount} reads, ${elapsed}ms, ${speed} KB/s, last read: ${readDuration}ms")
+                        lastLogTime = currentTime
                     }
-
+                    
+                    // Log if read takes too long
+                    if (readDuration > 1000) {
+                        Log.w(TAG, "[PERF] Slow read detected: ${readDuration}ms for ${n} bytes in ${if (isUpload) "UPLOAD" else "DOWNLOAD"}")
+                    }
+                    
                     try {
-                        output.flush()
-                        Log.d(TAG, "$direction Output flushed successfully")
+                        val writeStartTime = System.currentTimeMillis()
+                        forwardThroughVpn(buffer, n, output)
+                        val writeDuration = System.currentTimeMillis() - writeStartTime
+                        
+                        // Log if write takes too long
+                        if (writeDuration > 100) {
+                            Log.w(TAG, "[PERF] Slow write detected: ${writeDuration}ms for ${n} bytes in ${if (isUpload) "UPLOAD" else "DOWNLOAD"}")
+                        }
+                        
+                        // Flush every 4 reads for better performance
+                        flushCounter++
+                        if (flushCounter >= 4) {
+                            val flushStartTime = System.currentTimeMillis()
+                            output.flush()
+                            val flushDuration = System.currentTimeMillis() - flushStartTime
+                            if (flushDuration > 50) {
+                                Log.w(TAG, "[PERF] Slow flush detected: ${flushDuration}ms")
+                            }
+                            flushCounter = 0
+                        }
                     } catch (e: SocketException) {
-                        Log.w(TAG, "$direction Connection reset during flush: ${e.message}")
+                        Log.w(TAG, "Connection reset during VPN forward: ${e.message}")
+                        break
                     } catch (e: IOException) {
-                        Log.w(TAG, "$direction IO error during flush: ${e.message}")
+                        Log.w(TAG, "IO error during VPN forward: ${e.message}")
+                        break
                     }
+                } catch (e: SocketException) {
+                    Log.w(TAG, "Connection reset during data tunneling: ${e.message}")
+                    break
+                } catch (e: IOException) {
+                    Log.w(TAG, "Error reading data: ${e.message}")
+                    break
                 } catch (e: Exception) {
-                    Log.e(TAG, "$direction Unexpected error in tunnelData: ${e.message}", e)
-                } finally {
-                    // Record traffic statistics
-                    if (isUpload) {
-                        bytesUp.addAndGet(total)
-                        trafficMeter.recordTraffic(clientIp, total, 0)
-                        Log.d(TAG, "↑ Upload: $total bytes from $clientIp")
-                    } else {
-                        bytesDown.addAndGet(total)
-                        trafficMeter.recordTraffic(clientIp, 0, total)
-                        Log.d(TAG, "↓ Download: $total bytes to $clientIp")
-                    }
+                    Log.e(TAG, "Unexpected error during read: ${e.message}", e)
+                    break
                 }
             }
+            
+            // Final flush
+            try {
+                output.flush()
+            } catch (e: SocketException) {
+                Log.w(TAG, "Connection reset during flush: ${e.message}")
+            } catch (e: IOException) {
+                Log.w(TAG, "IO error during flush: ${e.message}")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Unexpected error in tunnelData: ${e.message}", e)
+        } finally {
+            val tunnelDuration = System.currentTimeMillis() - tunnelStartTime
+            val direction = if (isUpload) "UPLOAD" else "DOWNLOAD"
+            Log.i(TAG, "[PERF] Tunnel $direction completed: ${total} bytes | Duration: ${tunnelDuration}ms | Speed: ${if (tunnelDuration > 0) (total * 1000 / tunnelDuration / 1024) else 0} KB/s")
+            // Record traffic statistics asynchronously to not block
+            val finalTotal = total
+            scope.launch {
+                if (isUpload) {
+                    bytesUp.addAndGet(finalTotal)
+                    trafficMeter.recordTraffic(clientIp, finalTotal, 0)
+                    Log.d(TAG, "↑ Upload: $finalTotal bytes from $clientIp")
+                } else {
+                    bytesDown.addAndGet(finalTotal)
+                    trafficMeter.recordTraffic(clientIp, 0, finalTotal)
+                    Log.d(TAG, "↓ Download: $finalTotal bytes to $clientIp")
+                }
+            }
+        }
+    }
 
     /**
      * Note: Under the current approach of using the system-level third-party VPN, there is no need
@@ -584,16 +661,16 @@ class HttpProxyHandler(
      * activeNetwork.socketFactory. This method is only for logging and policy control.
      */
     private suspend fun forwardThroughVpn(data: ByteArray, length: Int, output: OutputStream) {
-        withContext(Dispatchers.IO) {
-            try {
-                output.write(data, 0, length) // output belongs to a VPN-bound target socket
-            } catch (e: SocketException) {
-                Log.w(TAG, "Socket closed during VPN forward: ${e.message}")
-                throw e // Re-throw to let caller handle connection cleanup
-            } catch (e: IOException) {
-                Log.w(TAG, "IO error during VPN forward: ${e.message}")
-                throw e // Re-throw to let caller handle connection cleanup
-            }
+        // No need for withContext - tunnelData is already running on Dispatchers.IO
+        // Removing unnecessary context switch to reduce overhead
+        try {
+            output.write(data, 0, length) // output belongs to a VPN-bound target socket
+        } catch (e: SocketException) {
+            Log.w(TAG, "Socket closed during VPN forward: ${e.message}")
+            throw e // Re-throw to let caller handle connection cleanup
+        } catch (e: IOException) {
+            Log.w(TAG, "IO error during VPN forward: ${e.message}")
+            throw e // Re-throw to let caller handle connection cleanup
         }
     }
 
@@ -601,13 +678,16 @@ class HttpProxyHandler(
     private fun connectTarget(host: String, port: Int): Socket {
         Log.d(TAG, "Creating socket via VPN-bound factory for $host:$port")
         return socketFactory.createSocket().apply {
-            // Balanced timeouts - not too short to allow concurrent connections to establish
-            connect(InetSocketAddress(host, port), /* connect timeout */ 10_000)
-            soTimeout = 30_000 // 30 seconds for read operations (increased for concurrent loads)
+            // Optimize for concurrent connections - faster connect timeout
+            // Multiple connections can establish in parallel
+            connect(InetSocketAddress(host, port), /* connect timeout */ 8_000)
+            soTimeout = 30_000 // 30 seconds for read operations
             tcpNoDelay = true // Disable Nagle's algorithm for lower latency
             // Set receive buffer size for better throughput
-            receiveBufferSize = 65536 // 64KB
-            sendBufferSize = 65536 // 64KB
+            receiveBufferSize = 131072 // 128KB for better concurrent performance
+            sendBufferSize = 131072 // 128KB for better concurrent performance
+            // Set keep-alive for better connection reuse
+            keepAlive = true
         }
     }
 
