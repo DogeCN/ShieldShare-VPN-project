@@ -18,7 +18,7 @@ class Socks5ProxyHandler(
 ) : ProxyHandler(clientSocket, trafficMeter) {
     companion object {
         private const val TAG = "Socks5ProxyHandler"
-        private const val BUFFER_SIZE = 8192
+        private const val BUFFER_SIZE = 65536 // 64KB buffer for better throughput (increased from 8KB)
         private const val SOCKS_VERSION = 0x05
         private const val AUTH_METHOD_NONE = 0x00
         private const val AUTH_METHOD_USERNAME_PASSWORD = 0x02
@@ -46,7 +46,28 @@ class Socks5ProxyHandler(
     override fun handleConnectionInternal() {
         scope.launch {
             try {
+                // Optimize client socket for better performance
+                try {
+                    socket.tcpNoDelay = true // Disable Nagle's algorithm for lower latency
+                    socket.receiveBufferSize = 131072 // 128KB for better throughput
+                    socket.sendBufferSize = 131072 // 128KB for better throughput
+                    socket.keepAlive = true // Enable keep-alive for connection reuse
+                    socket.soTimeout = 10000 // 10 seconds timeout for initial request
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error optimizing client socket", e)
+                }
+                
+                // Validate connection before processing
+                if (socket.isClosed || !socket.isConnected) {
+                    Log.w(TAG, "Invalid socket connection, skipping request")
+                    return@launch
+                }
+                
                 handleSocks5Request()
+            } catch (e: java.net.SocketTimeoutException) {
+                Log.d(TAG, "Socket timeout handling SOCKS5 request")
+            } catch (e: java.net.SocketException) {
+                Log.d(TAG, "Socket closed or reset: ${e.message}")
             } catch (e: Exception) {
                 Log.e(TAG, "Error handling SOCKS5 request", e)
             } finally {
@@ -239,7 +260,14 @@ class Socks5ProxyHandler(
         withContext(Dispatchers.IO) {
             try {
                 val targetSocket = socketFactory.createSocket()
-                targetSocket.connect(InetSocketAddress(host, port), 10000)
+                // Optimize for concurrent connections
+                targetSocket.connect(InetSocketAddress(host, port), 8000) // 8 second connect timeout
+                // Note: soTimeout will be set to 5s during tunneling for faster failure detection
+                targetSocket.soTimeout = 10000 // 10 seconds initially - will be reduced to 5s during tunneling
+                targetSocket.tcpNoDelay = true // Disable Nagle's algorithm for lower latency
+                targetSocket.receiveBufferSize = 131072 // 128KB for better concurrent performance
+                targetSocket.sendBufferSize = 131072 // 128KB for better concurrent performance
+                targetSocket.keepAlive = true // Enable keep-alive for connection reuse
 
                 // Send success reply
                 sendConnectionReply(
@@ -289,28 +317,51 @@ class Socks5ProxyHandler(
 
     private suspend fun startTunneling(targetSocket: Socket) =
         withContext(Dispatchers.IO) {
-            // Start bidirectional tunneling
-            val tunnelJob1 =
-                scope.launch {
-                    tunnelData(
-                        socket.getInputStream(),
-                        targetSocket.getOutputStream(),
-                        isUpload = true
-                    )
+            // Set shorter timeout for tunneling to fail fast on stuck connections
+            val originalClientTimeout = try { socket.soTimeout } catch (e: Exception) { 0 }
+            val originalTargetTimeout = try { targetSocket.soTimeout } catch (e: Exception) { 0 }
+            try {
+                socket.soTimeout = 5000 // 5 seconds - fail fast on stuck client connections
+                targetSocket.soTimeout = 5000 // 5 seconds - fail fast on stuck target connections
+            } catch (e: Exception) {
+                Log.w(TAG, "Error setting socket timeouts for tunneling", e)
+            }
+            
+            try {
+                // Use coroutineScope to ensure both tunnels are cancelled together if one fails
+                coroutineScope {
+                    val t1 = launch {
+                        tunnelData(
+                            socket.getInputStream(),
+                            targetSocket.getOutputStream(),
+                            isUpload = true
+                        )
+                    }
+                    val t2 = launch {
+                        tunnelData(
+                            targetSocket.getInputStream(),
+                            socket.getOutputStream(),
+                            isUpload = false
+                        )
+                    }
+                    // Wait for both tunnels - if one fails, the other is automatically cancelled
+                    t1.join()
+                    t2.join()
                 }
-            val tunnelJob2 =
-                scope.launch {
-                    tunnelData(
-                        targetSocket.getInputStream(),
-                        socket.getOutputStream(),
-                        isUpload = false
-                    )
+            } finally {
+                // Restore original socket timeouts
+                try {
+                    socket.soTimeout = originalClientTimeout
+                } catch (e: Exception) {
+                    // Ignore
                 }
-
-            // Wait for either tunnel to complete
-            joinAll(tunnelJob1, tunnelJob2)
-
-            targetSocket.close()
+                try {
+                    targetSocket.soTimeout = originalTargetTimeout
+                } catch (e: Exception) {
+                    // Ignore
+                }
+                safeClose(targetSocket)
+            }
         }
     private suspend fun tunnelData(
         input: InputStream,
@@ -319,6 +370,7 @@ class Socks5ProxyHandler(
     ) = withContext(Dispatchers.IO) {
         val buffer = ByteArray(BUFFER_SIZE)
         var total = 0L
+        var flushCounter = 0
         try {
             while (true) {
                 try {
@@ -326,25 +378,33 @@ class Socks5ProxyHandler(
                     if (n <= 0) break
                     
                     try {
-                        // Note: using VPN-bound target output stream, no extra "tunnel API" needed
                         forwardThroughVpn(buffer, n, output)
                         total += n
+                        
+                        // Flush every 4 reads for better performance
+                        flushCounter++
+                        if (flushCounter >= 4) {
+                            output.flush()
+                            flushCounter = 0
+                        }
                     } catch (e: SocketException) {
-                        Log.w(TAG, "Connection reset during VPN forward: ${e.message}")
                         break
                     } catch (e: IOException) {
-                        Log.w(TAG, "IO error during VPN forward: ${e.message}")
                         break
                     }
+                } catch (e: java.net.SocketTimeoutException) {
+                    // Timeout on read - connection is idle or stuck
+                    // For tunneling, if we timeout, close this direction
+                    Log.d(TAG, "[PERF] Read timeout in ${if (isUpload) "UPLOAD" else "DOWNLOAD"} tunnel after ${System.currentTimeMillis()}ms - closing direction")
+                    break
                 } catch (e: SocketException) {
-                    Log.w(TAG, "Connection reset during data tunneling: ${e.message}")
-                    break // Exit the loop on connection reset
+                    break
                 } catch (e: IOException) {
-                    Log.w(TAG, "Error reading data: ${e.message}")
-                    break // Exit the loop on I/O errors
+                    break
                 }
             }
             
+            // Final flush
             try {
                 output.flush()
             } catch (e: SocketException) {
@@ -355,15 +415,18 @@ class Socks5ProxyHandler(
         } catch (e: Exception) {
             Log.e(TAG, "Unexpected error in tunnelData: ${e.message}", e)
         } finally {
-            // Record traffic statistics
-            if (isUpload) {
-                bytesUp.addAndGet(total)
-                trafficMeter.recordTraffic(clientIp, total, 0)
-                Log.d(TAG, "↑ Upload: $total bytes from $clientIp")
-            } else {
-                bytesDown.addAndGet(total)
-                trafficMeter.recordTraffic(clientIp, 0, total)
-                Log.d(TAG, "↓ Download: $total bytes to $clientIp")
+            // Record traffic statistics asynchronously to avoid blocking
+            val finalTotal = total
+            scope.launch {
+                if (isUpload) {
+                    bytesUp.addAndGet(finalTotal)
+                    trafficMeter.recordTraffic(clientIp, finalTotal, 0)
+                    Log.d(TAG, "↑ Upload: $finalTotal bytes from $clientIp")
+                } else {
+                    bytesDown.addAndGet(finalTotal)
+                    trafficMeter.recordTraffic(clientIp, 0, finalTotal)
+                    Log.d(TAG, "↓ Download: $finalTotal bytes to $clientIp")
+                }
             }
         }
     }
@@ -375,16 +438,14 @@ class Socks5ProxyHandler(
      * This method is only for logging and policy control.
      */
     private suspend fun forwardThroughVpn(data: ByteArray, length: Int, output: OutputStream) {
-        withContext(Dispatchers.IO) {
-            try {
-                output.write(data, 0, length) // output belongs to a VPN-bound target socket
-            } catch (e: SocketException) {
-                Log.w(TAG, "Socket closed during VPN forward: ${e.message}")
-                throw e // Re-throw to let caller handle connection cleanup
-            } catch (e: IOException) {
-                Log.w(TAG, "IO error during VPN forward: ${e.message}")
-                throw e // Re-throw to let caller handle connection cleanup
-            }
+        // No need for withContext - tunnelData is already running on Dispatchers.IO
+        // Removing unnecessary context switch to reduce overhead
+        try {
+            output.write(data, 0, length) // output belongs to a VPN-bound target socket
+        } catch (e: SocketException) {
+            throw e // Re-throw to let caller handle connection cleanup
+        } catch (e: IOException) {
+            throw e // Re-throw to let caller handle connection cleanup
         }
     }
 
@@ -392,11 +453,18 @@ class Socks5ProxyHandler(
 
     private fun cleanup() {
         try {
-            socket.close()
+            // Cancel all coroutines in scope first
+            scope.cancel()
+            
+            // Close socket
+            if (!socket.isClosed) {
+                socket.close()
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error closing client socket", e)
         }
+        
+        // Call traffic callback
         trafficCallback(bytesUp.get(), bytesDown.get())
-        scope.cancel()
     }
 }
