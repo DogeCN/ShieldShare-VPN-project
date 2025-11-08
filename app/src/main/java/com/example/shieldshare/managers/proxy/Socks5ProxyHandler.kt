@@ -46,7 +46,20 @@ class Socks5ProxyHandler(
     override fun handleConnectionInternal() {
         scope.launch {
             try {
+                // Set socket timeout to prevent hanging connections
+                socket.soTimeout = 60000 // 60 seconds timeout
+                
+                // Validate connection before processing
+                if (socket.isClosed || !socket.isConnected) {
+                    Log.w(TAG, "Invalid socket connection, skipping request")
+                    return@launch
+                }
+                
                 handleSocks5Request()
+            } catch (e: java.net.SocketTimeoutException) {
+                Log.d(TAG, "Socket timeout handling SOCKS5 request")
+            } catch (e: java.net.SocketException) {
+                Log.d(TAG, "Socket closed or reset: ${e.message}")
             } catch (e: Exception) {
                 Log.e(TAG, "Error handling SOCKS5 request", e)
             } finally {
@@ -239,7 +252,10 @@ class Socks5ProxyHandler(
         withContext(Dispatchers.IO) {
             try {
                 val targetSocket = socketFactory.createSocket()
-                targetSocket.connect(InetSocketAddress(host, port), 10000)
+                // Use shorter timeout to fail fast
+                targetSocket.connect(InetSocketAddress(host, port), 8000)
+                targetSocket.soTimeout = 20000 // 20 seconds for read operations
+                targetSocket.tcpNoDelay = true // Disable Nagle's algorithm for lower latency
 
                 // Send success reply
                 sendConnectionReply(
@@ -392,11 +408,18 @@ class Socks5ProxyHandler(
 
     private fun cleanup() {
         try {
-            socket.close()
+            // Cancel all coroutines in scope first
+            scope.cancel()
+            
+            // Close socket
+            if (!socket.isClosed) {
+                socket.close()
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error closing client socket", e)
         }
+        
+        // Call traffic callback
         trafficCallback(bytesUp.get(), bytesDown.get())
-        scope.cancel()
     }
 }

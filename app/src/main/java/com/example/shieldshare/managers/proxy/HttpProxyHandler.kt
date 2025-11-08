@@ -66,43 +66,153 @@ class HttpProxyHandler(
                     Log.w(TAG, "Invalid socket connection, skipping request")
                     return@launch
                 }
-                handleRequest()
-            } catch (e: Exception) {
-                Log.e(TAG, "Error in connection handling", e)
-            }
-        }
-    }
-
-    private suspend fun handleRequest() =
-            withContext(Dispatchers.IO) {
+                
+                // STAGE 2: Start traffic session
+                sessionId = (trafficMeter as? TrafficMeterSimple)?.startSession(
+                    clientIp = clientIp,
+                    protocolType = "HTTP"
+                )
+                Log.i(TAG, "HTTP session started for client: $clientIp (Session: $sessionId)")
+                
+                // Set socket timeout to prevent hanging connections
+                socket.soTimeout = 15000 // 15 seconds timeout for initial request
+                
+                // Process requests - handle keep-alive for HTTP, but CONNECT requests close the connection
+                var requestCount = 0
+                val maxRequestsPerConnection = 20 // Lower limit to prevent accumulation
+                var isConnectRequest = false
+                var shouldCloseConnection = false
+                
+                // Create shared reader/writer for the connection to handle keep-alive properly
                 val clientIn = inOverride ?: socket.getInputStream()
                 val clientOut = socket.getOutputStream()
                 val reader = BufferedReader(InputStreamReader(clientIn, Charsets.US_ASCII))
                 val writer = PrintWriter(OutputStreamWriter(clientOut, Charsets.US_ASCII), true)
-
-                // Read the first request line
-                val requestLine = reader.readLine() ?: return@withContext
-                Log.d(TAG, "Proxy request: $requestLine")
-
-                val parts = requestLine.split(" ")
-                if (parts.size < 3) {
-                    sendErrorResponse(writer, 400, "Bad Request")
-                    return@withContext
+                
+                while (!socket.isClosed && socket.isConnected && 
+                       !shouldCloseConnection && 
+                       requestCount < maxRequestsPerConnection) {
+                    try {
+                        // For subsequent requests, use a very short timeout to detect idle connections quickly
+                        if (requestCount > 0) {
+                            socket.soTimeout = 1000 // 1 second for keep-alive detection - close idle connections fast
+                        }
+                        
+                        // Process the request - this will read the request line
+                        // If no data is available, it will timeout
+                        val requestResult = handleRequestWithStreams(reader, writer)
+                        
+                        // Reset timeout for next request processing
+                        socket.soTimeout = 15000
+                        
+                        if (requestResult == RequestResult.CONNECT) {
+                            // CONNECT request - connection is now dedicated to tunneling
+                            // Don't try to process more requests - the tunnel will handle it
+                            isConnectRequest = true
+                            shouldCloseConnection = true
+                            Log.d(TAG, "CONNECT request processed, connection dedicated to tunnel")
+                            // Note: handleConnectRequest will keep the connection open for tunneling
+                            // We break here so we don't try to process more requests
+                            break
+                        } else if (requestResult == RequestResult.CLOSE) {
+                            // Request indicated connection should close
+                            shouldCloseConnection = true
+                            Log.d(TAG, "Request indicated connection should close")
+                        } else if (requestResult == RequestResult.ERROR) {
+                            // Error occurred, close connection
+                            shouldCloseConnection = true
+                            Log.d(TAG, "Error processing request, closing connection")
+                        }
+                        // If SUCCESS, we continue the loop to process more requests
+                        
+                        requestCount++
+                        
+                    } catch (e: java.net.SocketTimeoutException) {
+                        if (requestCount == 0) {
+                            // Timeout on first request - no data received, close connection
+                            Log.d(TAG, "Timeout waiting for first request, closing connection")
+                        } else {
+                            // Timeout on subsequent request - connection idle, this is normal for keep-alive
+                            Log.d(TAG, "Connection idle after $requestCount requests, closing")
+                        }
+                        break
+                    } catch (e: java.net.SocketException) {
+                        Log.d(TAG, "Socket closed/reset after $requestCount requests: ${e.message}")
+                        break
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Unexpected error handling request #${requestCount + 1}: ${e.message}", e)
+                        shouldCloseConnection = true
+                        break
+                    }
                 }
-
-                val method = parts[0]
-                val url = parts[1]
-
-                if (method.equals(CONNECT_METHOD, ignoreCase = true)) {
-                    handleConnectRequest(writer, url)
-                } else {
-                    handleHttpRequest(reader, writer, method, url)
+                
+                if (requestCount > 0) {
+                    Log.d(TAG, "Processed $requestCount request(s) on connection (CONNECT: $isConnectRequest)")
                 }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in connection handling", e)
+            } finally {
+                cleanup()
             }
+        }
+    }
+
+    // Enum to indicate request processing result
+    private enum class RequestResult {
+        SUCCESS,      // Request processed successfully, connection can stay open
+        CONNECT,      // CONNECT request - connection dedicated to tunnel
+        CLOSE,        // Connection should close
+        ERROR         // Error occurred
+    }
+    
+    private suspend fun handleRequest() = withContext(Dispatchers.IO) {
+        val clientIn = inOverride ?: socket.getInputStream()
+        val clientOut = socket.getOutputStream()
+        val reader = BufferedReader(InputStreamReader(clientIn, Charsets.US_ASCII))
+        val writer = PrintWriter(OutputStreamWriter(clientOut, Charsets.US_ASCII), true)
+        handleRequestWithStreams(reader, writer)
+    }
+    
+    private suspend fun handleRequestWithStreams(
+        reader: BufferedReader,
+        writer: PrintWriter
+    ): RequestResult = withContext(Dispatchers.IO) {
+        // Read the first request line with timeout handling
+        val requestLine = try {
+            reader.readLine() ?: return@withContext RequestResult.ERROR
+        } catch (e: java.net.SocketTimeoutException) {
+            Log.d(TAG, "Timeout reading request line")
+            return@withContext RequestResult.ERROR
+        } catch (e: Exception) {
+            Log.d(TAG, "Error reading request line: ${e.message}")
+            return@withContext RequestResult.ERROR
+        }
+        Log.d(TAG, "Proxy request: $requestLine")
+
+        val parts = requestLine.split(" ")
+        if (parts.size < 3) {
+            sendErrorResponse(writer, 400, "Bad Request")
+            return@withContext RequestResult.CLOSE
+        }
+
+        val method = parts[0]
+        val url = parts[1]
+
+        if (method.equals(CONNECT_METHOD, ignoreCase = true)) {
+            handleConnectRequest(reader, writer, url)
+            RequestResult.CONNECT
+        } else {
+            val closeConnection = handleHttpRequest(reader, writer, method, url)
+            if (closeConnection) RequestResult.CLOSE else RequestResult.SUCCESS
+        }
+    }
 
     /** CONNECT method: establish a TCP tunnel and pump bytes both ways */
-    private suspend fun handleConnectRequest(writer: PrintWriter, url: String) =
-            withContext(Dispatchers.IO) {
+    private suspend fun handleConnectRequest(
+        reader: BufferedReader,
+        writer: PrintWriter,
+        url: String
+    ) = withContext(Dispatchers.IO) {
                 Log.i(TAG, "HTTPS CONNECT request to: $url from $clientIp")
 
                 val (host, port) = parseHostPort(url)
@@ -171,176 +281,189 @@ class HttpProxyHandler(
                 }
             }
 
-    /** Plain HTTP proxying (no TLS termination) */
+    /** Plain HTTP proxying (no TLS termination)
+     * @return true if connection should close, false if keep-alive is possible */
     private suspend fun handleHttpRequest(
-            reader: BufferedReader,
-            writer: PrintWriter,
-            method: String,
-            url: String
-    ) =
-            withContext(Dispatchers.IO) {
-                Log.d(TAG, "Handling HTTP request: $method $url")
+        reader: BufferedReader,
+        writer: PrintWriter,
+        method: String,
+        url: String
+    ): Boolean = withContext(Dispatchers.IO) {
+        Log.d(TAG, "Handling HTTP request: $method $url")
 
-                // Read all headers (text-mode)
-                val headers = mutableListOf<String>()
-                var line: String?
-                var contentLength: Int? = null
-                while (reader.readLine().also { line = it } != null && line!!.isNotEmpty()) {
-                    val h = line!!
-                    headers.add(h)
-                    if (h.lowercase().startsWith("user-agent:")) {
-                        userAgent = h.substringAfter(":").trim()
-                    }
-                    // Extract Content-Length for POST/PUT requests
-                    if (h.lowercase().startsWith("content-length:")) {
-                        contentLength = h.substringAfter(":").trim().toIntOrNull()
+        // Read all headers (text-mode)
+        val headers = mutableListOf<String>()
+        var line: String?
+        var contentLength: Int? = null
+        while (reader.readLine().also { line = it } != null && line!!.isNotEmpty()) {
+            val h = line!!
+            headers.add(h)
+            if (h.lowercase().startsWith("user-agent:")) {
+                userAgent = h.substringAfter(":").trim()
+            }
+            // Extract Content-Length for POST/PUT requests
+            if (h.lowercase().startsWith("content-length:")) {
+                contentLength = h.substringAfter(":").trim().toIntOrNull()
+            }
+        }
+
+        // Parse URL and fall back to Host header if the request line was relative-form
+        val (hostFromUrl, portFromUrl, pathFromUrl) = parseHttpUrl(url)
+        val hostHeader = headers.firstOrNull { it.startsWith("Host:", ignoreCase = true) }
+            ?.substringAfter(":")?.trim()
+        val (host, port, path) = when {
+            hostFromUrl != null -> Triple(hostFromUrl, portFromUrl, pathFromUrl)
+            hostHeader != null -> {
+                val (hh, hp) = splitHostPort(hostHeader, defaultPort = 80)
+                Triple(hh, hp, url) // url was likely relative path
+            }
+            else -> Triple(null, -1, url)
+        }
+
+        if (host == null || port <= 0) {
+            sendErrorResponse(writer, 400, "Bad Request - Invalid URL/Host")
+            return@withContext true // Close connection on error
+        }
+
+        hostsAccessed.add(host)
+
+        // Check for Connection header to determine if we should keep connection alive
+        val connectionHeader = headers.firstOrNull { 
+            it.startsWith("Connection:", ignoreCase = true) 
+        }?.substringAfter(":")?.trim()?.lowercase()
+        val shouldClose = connectionHeader == "close"
+        // HTTP/1.1 defaults to keep-alive unless Connection: close is specified
+        val isKeepAlive = !shouldClose && (connectionHeader == "keep-alive" || HTTP_VERSION == "HTTP/1.1")
+        
+        // Build request preface to forward to target
+        val sb = StringBuilder()
+        sb.append("$method $path $HTTP_VERSION\r\n")
+        headers.forEach { h -> sb.append(h).append("\r\n") }
+        // If client wants keep-alive, we'll handle it, but always add Connection header for clarity
+        if (!headers.any { it.startsWith("Connection:", ignoreCase = true) }) {
+            sb.append("Connection: ${if (isKeepAlive) "keep-alive" else "close"}\r\n")
+        }
+        sb.append("\r\n")
+        val preface = sb.toString().toByteArray(Charsets.US_ASCII)
+
+        // Forward to target via VPN-bound socket
+        val targetSocket = connectTarget(host, port)
+        try {
+            val targetOut = BufferedOutputStream(targetSocket.getOutputStream())
+            val targetIn = BufferedInputStream(targetSocket.getInputStream())
+            val clientOut = BufferedOutputStream(socket.getOutputStream())
+            val clientIn = socket.getInputStream()
+
+            // Send request line + headers
+            var connectionOk = true
+            var totalUp = 0L
+            try {
+                forwardThroughVpn(preface, preface.size, targetOut)
+                
+                // Read and forward request body for POST/PUT/PATCH requests
+                if (contentLength != null && contentLength!! > 0 && 
+                    (method.equals("POST", ignoreCase = true) || 
+                     method.equals("PUT", ignoreCase = true) || 
+                     method.equals("PATCH", ignoreCase = true))) {
+                    Log.d(TAG, "Reading request body: $contentLength bytes for $method request")
+                    val bodyBuffer = ByteArray(BUFFER_SIZE)
+                    var remaining = contentLength!!
+                    
+                    while (remaining > 0) {
+                        val toRead = minOf(remaining, BUFFER_SIZE)
+                        val read = clientIn.read(bodyBuffer, 0, toRead)
+                        if (read <= 0) break
+                        
+                        forwardThroughVpn(bodyBuffer, read, targetOut)
+                        totalUp += read
+                        remaining -= read
                     }
                 }
 
-                // Parse URL and fall back to Host header if the request line was relative-form
-                val (hostFromUrl, portFromUrl, pathFromUrl) = parseHttpUrl(url)
-                val hostHeader =
-                        headers
-                                .firstOrNull { it.startsWith("Host:", ignoreCase = true) }
-                                ?.substringAfter(":")
-                                ?.trim()
-                val (host, port, path) =
-                        when {
-                            hostFromUrl != null -> Triple(hostFromUrl, portFromUrl, pathFromUrl)
-                            hostHeader != null -> {
-                                val (hh, hp) = splitHostPort(hostHeader, defaultPort = 80)
-                                Triple(hh, hp, url) // url was likely relative path
-                            }
-                            else -> Triple(null, -1, url)
-                        }
+                targetOut.flush()
+            } catch (e: SocketException) {
+                Log.w(TAG, "Connection reset while sending request: ${e.message}")
+                connectionOk = false
+            } catch (e: IOException) {
+                Log.w(TAG, "IO error while sending request: ${e.message}")
+                connectionOk = false
+            }
 
-                if (host == null || port <= 0) {
-                    sendErrorResponse(writer, 400, "Bad Request - Invalid URL/Host")
-                    return@withContext
-                }
-
-                hostsAccessed.add(host)
-
-                // Build request preface to forward to target
-                val sb = StringBuilder()
-                sb.append("$method $path $HTTP_VERSION\r\n")
-                headers.forEach { h -> sb.append(h).append("\r\n") }
-                sb.append("\r\n")
-                val preface = sb.toString().toByteArray(Charsets.US_ASCII)
-
-                // Forward to target via VPN-bound socket
-                val targetSocket = connectTarget(host, port)
+            // Stream response bytes back to client only if connection is still ok
+            var totalDown = 0L
+            if (connectionOk) {
+                val buffer = ByteArray(BUFFER_SIZE)
                 try {
-                    val targetOut = BufferedOutputStream(targetSocket.getOutputStream())
-                    val targetIn = BufferedInputStream(targetSocket.getInputStream())
-                    val clientOut = BufferedOutputStream(socket.getOutputStream())
-                    val clientIn = socket.getInputStream()
-
-                    // Send request line + headers
-                    var connectionOk = true
-                    var totalUp = 0L
-                    try {
-                        forwardThroughVpn(preface, preface.size, targetOut)
-
-                        // Read and forward request body for POST/PUT/PATCH requests
-                        if (contentLength != null &&
-                                        contentLength > 0 &&
-                                        (method.equals("POST", ignoreCase = true) ||
-                                                method.equals("PUT", ignoreCase = true) ||
-                                                method.equals("PATCH", ignoreCase = true))
-                        ) {
-                            Log.d(
-                                    TAG,
-                                    "Reading request body: $contentLength bytes for $method request"
-                            )
-                            val bodyBuffer = ByteArray(BUFFER_SIZE)
-                            var remaining = contentLength
-
-                            while (remaining > 0) {
-                                val toRead = minOf(remaining, BUFFER_SIZE)
-                                val read = clientIn.read(bodyBuffer, 0, toRead)
-                                if (read <= 0) break
-
-                                forwardThroughVpn(bodyBuffer, read, targetOut)
-                                totalUp += read
-                                remaining -= read
-                            }
-                            Log.d(TAG, "Forwarded request body: ${contentLength - remaining} bytes")
-                        }
-
-                        targetOut.flush()
-                    } catch (e: SocketException) {
-                        Log.w(TAG, "Connection reset while sending request: ${e.message}")
-                        connectionOk = false
-                    } catch (e: IOException) {
-                        Log.w(TAG, "IO error while sending request: ${e.message}")
-                        connectionOk = false
-                    }
-
-                    // Stream response bytes back to client only if connection is still ok
-                    if (connectionOk) {
-                        val buffer = ByteArray(BUFFER_SIZE)
-                        var totalDown = 0L
-                        try {
-                            while (true) {
-                                val n =
-                                        try {
-                                            targetIn.read(buffer)
-                                        } catch (e: SocketException) {
-                                            Log.w(
-                                                    TAG,
-                                                    "Connection reset while reading response: ${e.message}"
-                                            )
-                                            break
-                                        } catch (e: IOException) {
-                                            Log.w(
-                                                    TAG,
-                                                    "IO error while reading response: ${e.message}"
-                                            )
-                                            break
-                                        }
-
-                                if (n <= 0) break
-
+                    while (true) {
+                        val n =
                                 try {
-                                    clientOut.write(buffer, 0, n)
-                                    totalDown += n
+                                    targetIn.read(buffer)
                                 } catch (e: SocketException) {
                                     Log.w(
                                             TAG,
-                                            "Connection reset while writing response to client: ${e.message}"
+                                            "Connection reset while reading response: ${e.message}"
                                     )
                                     break
                                 } catch (e: IOException) {
                                     Log.w(
                                             TAG,
-                                            "IO error while writing response to client: ${e.message}"
+                                            "IO error while reading response: ${e.message}"
                                     )
                                     break
                                 }
-                            }
 
-                            try {
-                                clientOut.flush()
-                            } catch (e: SocketException) {
-                                Log.w(TAG, "Connection reset during response flush: ${e.message}")
-                            } catch (e: IOException) {
-                                Log.w(TAG, "IO error during response flush: ${e.message}")
-                            }
-                        } finally {
-                            // traffic accounting (include request body in upload)
-                            bytesUp.addAndGet(totalUp)
-                            bytesDown.addAndGet(totalDown)
-                            trafficMeter.recordTraffic(clientIp, totalUp, totalDown)
+                        if (n <= 0) break
+
+                        try {
+                            clientOut.write(buffer, 0, n)
+                            totalDown += n
+                        } catch (e: SocketException) {
+                            Log.w(
+                                    TAG,
+                                    "Connection reset while writing response to client: ${e.message}"
+                            )
+                            break
+                        } catch (e: IOException) {
+                            Log.w(
+                                    TAG,
+                                    "IO error while writing response to client: ${e.message}"
+                            )
+                            break
                         }
                     }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to handle HTTP request to $host:$port", e)
-                    sendErrorResponse(writer, 502, "Bad Gateway")
+
+                    try {
+                        clientOut.flush()
+                    } catch (e: SocketException) {
+                        Log.w(TAG, "Connection reset during response flush: ${e.message}")
+                    } catch (e: IOException) {
+                        Log.w(TAG, "IO error during response flush: ${e.message}")
+                    }
                 } finally {
-                    safeClose(targetSocket)
+                    // traffic accounting (include request body in upload)
+                    bytesUp.addAndGet(totalUp)
+                    bytesDown.addAndGet(totalDown)
+                    trafficMeter.recordTraffic(clientIp, totalUp, totalDown)
                 }
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to handle HTTP request to $host:$port", e)
+            // Only send error response if connection is still valid
+            if (!socket.isClosed && socket.isConnected) {
+                try {
+                    sendErrorResponse(writer, 502, "Bad Gateway")
+                } catch (ignored: Exception) {
+                    // Connection might be broken, ignore
+                }
+            }
+            return@withContext true // Close connection on error
+        } finally {
+            safeClose(targetSocket)
+        }
+        
+        // Return whether connection should close
+        shouldClose
+    }
 
     /**
      * Copy bytes from input to output. If isUpload = true, bytes are accounted as client -> target
@@ -458,10 +581,10 @@ class HttpProxyHandler(
     private fun connectTarget(host: String, port: Int): Socket {
         Log.d(TAG, "Creating socket via VPN-bound factory for $host:$port")
         return socketFactory.createSocket().apply {
-            Log.d(TAG, "Socket created, connecting to $host:$port...")
-            connect(InetSocketAddress(host, port), /* connect timeout */ 10_000)
-            soTimeout = 30_000
-            Log.d(TAG, "Socket connected successfully to $host:$port, soTimeout=$soTimeout")
+            // Use shorter timeouts to fail fast and free up resources
+            connect(InetSocketAddress(host, port), /* connect timeout */ 8_000)
+            soTimeout = 20_000 // 20 seconds for read operations
+            tcpNoDelay = true // Disable Nagle's algorithm for lower latency
         }
     }
 
@@ -476,7 +599,13 @@ class HttpProxyHandler(
 
     private fun cleanup() {
         try {
-            socket.close()
+            // Cancel all coroutines in scope first
+            scope.cancel()
+            
+            // Close socket
+            if (!socket.isClosed) {
+                socket.close()
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error closing client socket", e)
         }
@@ -497,9 +626,9 @@ class HttpProxyHandler(
                 "   **Hosts Accessed**: ${hostsAccessed.size} - ${hostsAccessed.joinToString(", ")}"
         )
         Log.i(TAG, "   **User Agent**: ${userAgent ?: "Unknown"}")
-
+        
+        // Call traffic callback
         trafficCallback(totalUp, totalDown)
-        scope.cancel()
     }
 
     private fun parseHostPort(url: String): Pair<String?, Int> =

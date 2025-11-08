@@ -40,4 +40,13 @@ abstract class ProxyHandler(
     protected open fun sendAuthenticationError() {
         // Default implementation - can be overridden
     }
+    
+    /** Check if the handler's socket is still valid/connected */
+    fun isSocketValid(): Boolean {
+        return try {
+            !socket.isClosed && socket.isConnected
+        } catch (e: Exception) {
+            false
+        }
+    }
 }
