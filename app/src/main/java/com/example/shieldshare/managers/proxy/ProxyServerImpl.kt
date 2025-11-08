@@ -36,6 +36,10 @@ class ProxyServerImpl(
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val clientDetectionScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var currentInstance: ProxyInstance? = null
+    
+    // Connection limits to prevent resource exhaustion - more aggressive limits
+    private val MAX_CONCURRENT_HANDLERS = 50 // Maximum concurrent proxy handlers (reduced from 200)
+    private val MAX_HANDLERS_PER_CLIENT = 5 // Maximum handlers per client IP (reduced from 10)
 
     private fun createServerSocket(port: Int, hotspotIp: String?): ServerSocket {
         val bindAddress =
@@ -46,7 +50,7 @@ class ProxyServerImpl(
                 }
         return ServerSocket().apply {
             reuseAddress = true
-            soTimeout = 30000
+            soTimeout = 10000 // 10 seconds timeout for accept() - fail faster
             bind(bindAddress)
         }
     }
@@ -163,6 +167,7 @@ class ProxyServerImpl(
 
                     serviceScope.launch { startWebServer(config) }
                     serviceScope.launch { startClientCleanup() }
+                    serviceScope.launch { startHandlerCleanup() }
                     serviceScope.launch {
                         Log.i(TAG, "Starting proactive client detection")
                         startClientScanning()
@@ -347,6 +352,38 @@ class ProxyServerImpl(
         // Obtain VPN-aware SocketFactory (if not VPN, will fall back to default unless strict=true)
         val socketFactory = context.vpnAwareSocketFactory(strict = strictVpn)
 
+        // Check connection limits
+        val activeHandlerCount = proxyHandlers.size
+        if (activeHandlerCount >= MAX_CONCURRENT_HANDLERS) {
+            Log.w(TAG, "Maximum concurrent handlers reached ($activeHandlerCount), rejecting new connection from $clientIp")
+            try {
+                when (ptype) {
+                    ProxyType.SOCKS5 -> sendSocks5GeneralFailure(socket)
+                    else -> sendHttp502(socket)
+                }
+            } catch (ignored: Exception) {
+            } finally {
+                safeClose(socket)
+            }
+            return
+        }
+        
+        // Check per-client handler limit
+        val clientHandlers = proxyHandlers.keys.count { it.startsWith("${socket.remoteSocketAddress}_") }
+        if (clientHandlers >= MAX_HANDLERS_PER_CLIENT) {
+            Log.w(TAG, "Maximum handlers per client reached ($clientHandlers) for $clientIp, rejecting new connection")
+            try {
+                when (ptype) {
+                    ProxyType.SOCKS5 -> sendSocks5GeneralFailure(socket)
+                    else -> sendHttp502(socket)
+                }
+            } catch (ignored: Exception) {
+            } finally {
+                safeClose(socket)
+            }
+            return
+        }
+
         // Create appropriate handler
         val handler: ProxyHandler = when (ptype) {
             ProxyType.HTTP_HTTPS ->
@@ -387,6 +424,7 @@ class ProxyServerImpl(
         }
 
         proxyHandlers[clientId] = handler
+        Log.d(TAG, "Created handler $clientId (Total handlers: ${proxyHandlers.size}, Client handlers: $clientHandlers)")
 
         // Start the handler in a coroutine
         serviceScope.launch {
@@ -751,6 +789,72 @@ function isLocalNetwork(host) {
                     delay(30_000) // Clean up every 30 seconds
                 } catch (e: Exception) {
                     Log.e(TAG, "Error in client cleanup", e)
+                    delay(60_000) // Wait longer on error
+                }
+            }
+        }
+    }
+
+    /** Clean up stale proxy handlers that may have leaked */
+    private suspend fun startHandlerCleanup() {
+        coroutineScope {
+            while (isActive) {
+                try {
+                    val handlerCount = proxyHandlers.size
+                    if (handlerCount > 0) {
+                        Log.d(TAG, "Active proxy handlers: $handlerCount")
+                        
+                        // Remove handlers for closed sockets
+                        val iterator = proxyHandlers.iterator()
+                        var removedCount = 0
+                        while (iterator.hasNext()) {
+                            val (clientId, handler) = iterator.next()
+                            try {
+                                // Check if the handler's socket is still valid
+                                if (!handler.isSocketValid()) {
+                                    iterator.remove()
+                                    removedCount++
+                                    Log.d(TAG, "Removed stale handler: $clientId")
+                                }
+                            } catch (e: Exception) {
+                                // Handler or socket might be in invalid state, remove it
+                                iterator.remove()
+                                removedCount++
+                                Log.d(TAG, "Removed invalid handler: $clientId (${e.message})")
+                            }
+                        }
+                        
+                        if (removedCount > 0) {
+                            Log.i(TAG, "Cleaned up $removedCount stale handler(s), remaining: ${proxyHandlers.size}")
+                        }
+                        
+                        // If we're approaching the limit, be more aggressive about closing connections
+                        if (handlerCount > MAX_CONCURRENT_HANDLERS * 0.8) {
+                            Log.w(TAG, "Handler count is high ($handlerCount), closing idle connections aggressively")
+                            // Close handlers with closed/invalid sockets immediately
+                            val iterator2 = proxyHandlers.iterator()
+                            var forceRemoved = 0
+                            while (iterator2.hasNext()) {
+                                val (clientId2, handler2) = iterator2.next()
+                                try {
+                                    if (!handler2.isSocketValid()) {
+                                        iterator2.remove()
+                                        forceRemoved++
+                                    }
+                                } catch (e: Exception) {
+                                    iterator2.remove()
+                                    forceRemoved++
+                                }
+                            }
+                            if (forceRemoved > 0) {
+                                Log.i(TAG, "Force removed $forceRemoved invalid handler(s) due to high handler count")
+                            }
+                        }
+                    }
+                    
+                    delay(30_000) // Clean up every 30 seconds (more frequent)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error in handler cleanup", e)
                     delay(60_000) // Wait longer on error
                 }
             }
