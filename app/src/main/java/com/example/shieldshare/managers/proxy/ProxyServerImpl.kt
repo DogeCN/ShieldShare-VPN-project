@@ -60,12 +60,15 @@ class ProxyServerImpl(
     private val HANDLER_TIMEOUT_MS = 120_000L // 2 minutes - remove handlers that are stuck
 
     private fun createServerSocket(port: Int, hotspotIp: String?): ServerSocket {
-        val bindAddress =
-                if (hotspotIp != null) {
-                    InetSocketAddress(hotspotIp, port)
-                } else {
-                    InetSocketAddress("0.0.0.0", port)
-                }
+        // Always bind to 0.0.0.0 to accept connections from any interface
+        // This ensures compatibility with both 2.4GHz and 5GHz hotspots
+        // The hotspotIp parameter is kept for logging purposes but not used for binding
+        val bindAddress = InetSocketAddress("0.0.0.0", port)
+        if (hotspotIp != null) {
+            Log.d(TAG, "Binding proxy server to all interfaces (0.0.0.0:$port) - hotspot IP: $hotspotIp")
+        } else {
+            Log.d(TAG, "Binding proxy server to all interfaces (0.0.0.0:$port) - no hotspot IP detected")
+        }
         return ServerSocket().apply {
             reuseAddress = true
             soTimeout = 1000 // 1 second timeout for accept() - fail fast if no connections, allows checking isActive
