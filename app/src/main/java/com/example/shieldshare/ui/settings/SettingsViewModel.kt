@@ -57,9 +57,10 @@ constructor(
         appPrefs.putString("theme_mode", themeMode.name)
     }
 
-    // TODO: Add notifications functionality
     fun updateNotificationsEnabled(enabled: Boolean) {
         _uiState.value = _uiState.value.copy(notificationsEnabled = enabled)
+        // Auto-save notification setting immediately for instant feedback
+        appPrefs.putBoolean("notifications_enabled", enabled)
     }
 
     fun updateHttpHttpsEnabled(enabled: Boolean) {
