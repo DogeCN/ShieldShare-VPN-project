@@ -1,7 +1,15 @@
 package com.example.shieldshare.managers.proxy
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.util.Log
+import androidx.core.content.ContextCompat
+import androidx.core.app.NotificationCompat
+import com.example.shieldshare.R
+import com.example.shieldshare.data.prefs.AppPrefs
 import com.example.shieldshare.managers.hotspot.HotspotManager
 import com.example.shieldshare.managers.meter.TrafficMeter
 import com.example.shieldshare.managers.vpn.VpnManager
@@ -16,6 +24,7 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.*
 
 /** Main proxy server implementation handling HTTP/HTTPS and SOCKS5 protocols */
@@ -23,10 +32,14 @@ class ProxyServerImpl(
         private val context: Context,
         private val trafficMeter: TrafficMeter,
         private val vpnManager: VpnManager,
-        private val hotspotManager: HotspotManager
+        private val hotspotManager: HotspotManager,
+        private val appPrefs: AppPrefs
 ) : ProxyServer {
     companion object {
         private const val TAG = "ProxyServerImpl"
+        private const val CLIENT_NOTIFICATION_CHANNEL_ID = "client_notifications"
+        private const val CLIENT_NOTIFICATION_ID_BASE = 1000
+        private val notificationCounter = AtomicInteger(0)
     }
 
     private var httpServerSocket: ServerSocket? = null
@@ -47,12 +60,15 @@ class ProxyServerImpl(
     private val HANDLER_TIMEOUT_MS = 120_000L // 2 minutes - remove handlers that are stuck
 
     private fun createServerSocket(port: Int, hotspotIp: String?): ServerSocket {
-        val bindAddress =
-                if (hotspotIp != null) {
-                    InetSocketAddress(hotspotIp, port)
-                } else {
-                    InetSocketAddress("0.0.0.0", port)
-                }
+        // Always bind to 0.0.0.0 to accept connections from any interface
+        // This ensures compatibility with both 2.4GHz and 5GHz hotspots
+        // The hotspotIp parameter is kept for logging purposes but not used for binding
+        val bindAddress = InetSocketAddress("0.0.0.0", port)
+        if (hotspotIp != null) {
+            Log.d(TAG, "Binding proxy server to all interfaces (0.0.0.0:$port) - hotspot IP: $hotspotIp")
+        } else {
+            Log.d(TAG, "Binding proxy server to all interfaces (0.0.0.0:$port) - no hotspot IP detected")
+        }
         return ServerSocket().apply {
             reuseAddress = true
             soTimeout = 1000 // 1 second timeout for accept() - fail fast if no connections, allows checking isActive
@@ -327,6 +343,8 @@ class ProxyServerImpl(
                         TAG,
                         "NEW CLIENT connected via proxy: $clientIp (Total unique clients: ${connectedClients.size})"
                 )
+                // Show notification for new client
+                showNewClientNotification(clientIp)
                 // Try to get device name for new clients
                 serviceScope.launch {
                     val deviceName = tryGetDeviceName(clientIp)
@@ -1235,6 +1253,101 @@ function isLocalNetwork(host) {
         handlersPerClient.compute(clientAddressStr) { _, count ->
             val newCount = (count ?: 1) - 1
             if (newCount <= 0) null else newCount // Remove entry if count reaches 0
+        }
+    }
+    
+    /**
+     * Create notification channel for client notifications
+     */
+    private fun createClientNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            // Check if channel already exists
+            if (notificationManager.getNotificationChannel(CLIENT_NOTIFICATION_CHANNEL_ID) == null) {
+                val channel = NotificationChannel(
+                    CLIENT_NOTIFICATION_CHANNEL_ID,
+                    "Client Notifications",
+                    NotificationManager.IMPORTANCE_HIGH // Use HIGH importance so notifications show up
+                ).apply {
+                    description = "Notifications when new clients connect to the proxy"
+                    enableVibration(true)
+                    enableLights(true)
+                }
+                notificationManager.createNotificationChannel(channel)
+                Log.d(TAG, "Created notification channel: $CLIENT_NOTIFICATION_CHANNEL_ID")
+            }
+        }
+    }
+    
+    /**
+     * Check if we have permission to show notifications (Android 13+)
+     */
+    private fun hasNotificationPermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            // Permission not required for Android < 13
+            true
+        }
+    }
+    
+    /**
+     * Show a notification when a new client is detected
+     */
+    private fun showNewClientNotification(clientIp: String) {
+        try {
+            Log.i(TAG, "Attempting to show notification for new client: $clientIp")
+            
+            // Check if notifications are enabled in settings
+            val notificationsEnabled = appPrefs.getBoolean("notifications_enabled", true)
+            if (!notificationsEnabled) {
+                Log.d(TAG, "Notifications disabled in settings, skipping notification for client: $clientIp")
+                return
+            }
+            
+            // Check notification permission (Android 13+)
+            if (!hasNotificationPermission()) {
+                Log.w(TAG, "Notification permission not granted. Cannot show notification for client: $clientIp")
+                Log.w(TAG, "Please grant notification permission in app settings")
+                return
+            }
+            
+            // Ensure notification channel exists
+            createClientNotificationChannel()
+            
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            
+            // Check if notifications are enabled for this channel
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = notificationManager.getNotificationChannel(CLIENT_NOTIFICATION_CHANNEL_ID)
+                if (channel != null && channel.importance == NotificationManager.IMPORTANCE_NONE) {
+                    Log.w(TAG, "Notification channel is disabled by user")
+                    return
+                }
+            }
+            
+            // Generate unique notification ID for each client
+            val notificationId = CLIENT_NOTIFICATION_ID_BASE + (notificationCounter.getAndIncrement() % 1000)
+            
+            val notification = NotificationCompat.Builder(context, CLIENT_NOTIFICATION_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle("New Client Connected")
+                .setContentText("Client IP: $clientIp")
+                .setStyle(NotificationCompat.BigTextStyle()
+                    .bigText("A new client has connected to the proxy server.\nClient IP: $clientIp"))
+                .setPriority(NotificationCompat.PRIORITY_HIGH) // Use HIGH priority
+                .setDefaults(NotificationCompat.DEFAULT_ALL) // Sound, vibration, lights
+                .setAutoCancel(true)
+                .build()
+            
+            notificationManager.notify(notificationId, notification)
+            Log.i(TAG, "Notification shown successfully for new client: $clientIp (ID: $notificationId)")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to show notification for new client: $clientIp", e)
+            e.printStackTrace()
         }
     }
 }

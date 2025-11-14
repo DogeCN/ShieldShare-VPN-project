@@ -58,8 +58,9 @@ object AppModule {
             @ApplicationContext context: Context,
             trafficMeter: TrafficMeter,
             vpnManager: VpnManager,
-            hotspotManager: HotspotManager
-    ): ProxyServer = ProxyServerImpl(context, trafficMeter, vpnManager, hotspotManager)
+            hotspotManager: HotspotManager,
+            appPrefs: AppPrefs
+    ): ProxyServer = ProxyServerImpl(context, trafficMeter, vpnManager, hotspotManager, appPrefs)
 
     @Provides
     @Singleton
