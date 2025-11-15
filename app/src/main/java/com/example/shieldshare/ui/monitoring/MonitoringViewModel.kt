@@ -50,11 +50,9 @@ class MonitoringViewModel @Inject constructor(
         }
         
         // Observe service sessions from database
-        // Use debounce and distinctUntilChanged to prevent excessive updates
+        // Room Flow automatically emits when data changes, so we can collect directly
         viewModelScope.launch {
             trafficRepository.getAllServiceSessions()
-                .distinctUntilChanged() // Only emit when data actually changes
-                .debounce(500) // Wait 500ms after last emission before processing
                 .collect { serviceSessions ->
                     _uiState.value = _uiState.value.copy(serviceSessions = serviceSessions)
                     // Automatically update database stats when service sessions change

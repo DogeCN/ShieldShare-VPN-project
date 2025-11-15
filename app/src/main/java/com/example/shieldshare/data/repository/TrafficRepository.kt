@@ -573,19 +573,36 @@ class TrafficRepository @Inject constructor(
     /**
      * Get database statistics.
      * Only counts completed (non-active) service sessions for persistent data display.
+     * Unique clients count is based on clients that participated in completed service sessions.
      */
     suspend fun getDatabaseStats(): DatabaseStats {
         return withContext(Dispatchers.IO) {
             try {
                 // Get all sessions and filter to only count completed ones
                 val allSessions = serviceSessionDao.getAllSessions().first()
-                val completedSessionCount = allSessions.count { !it.isActive }.toLong()
-                val clientCount = clientStatsDao.getClientCount()
+                val completedSessions = allSessions.filter { !it.isActive }
+                val completedSessionCount = completedSessions.size.toLong()
+                
+                // Count unique clients from completed service sessions only
+                // Get all unique client IPs from traffic records within completed session time ranges
+                val uniqueClientIps = mutableSetOf<String>()
+                completedSessions.forEach { session ->
+                    val endTime = session.endTime ?: System.currentTimeMillis()
+                    val trafficRecords = trafficRecordDao.getTrafficInRange(
+                        session.startTime,
+                        endTime,
+                        10000
+                    ).first()
+                    trafficRecords.forEach { record ->
+                        uniqueClientIps.add(record.clientIp)
+                    }
+                }
+                val uniqueClientsCount = uniqueClientIps.size.toLong()
 
                 DatabaseStats(
                     totalRecords = 0L, // Removed - not showing total records
                     totalSessions = completedSessionCount, // Only completed service sessions
-                    uniqueClients = clientCount
+                    uniqueClients = uniqueClientsCount // Only clients from completed sessions
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Error getting database stats", e)
