@@ -133,8 +133,11 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideTrafficMeter(@ApplicationContext ctx: Context): TrafficMeter =
-            TrafficMeterSimple(ctx) // STAGE 2: Simple Traffic Metering Implementation
+    fun provideTrafficMeter(
+        @ApplicationContext ctx: Context,
+        trafficRepository: TrafficRepository
+    ): TrafficMeter =
+            TrafficMeterSimple(ctx, trafficRepository) // STAGE 2: Simple Traffic Metering Implementation
 
     @Provides
     @Singleton
