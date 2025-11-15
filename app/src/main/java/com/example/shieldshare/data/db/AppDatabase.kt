@@ -8,9 +8,10 @@ import androidx.room.RoomDatabase
         KvStore::class,
         TrafficRecordEntity::class,
         ClientSessionEntity::class,
-        ClientStatsEntity::class
+        ClientStatsEntity::class,
+        ServiceSessionEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -18,4 +19,5 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun trafficRecordDao(): TrafficRecordDao
     abstract fun clientSessionDao(): ClientSessionDao
     abstract fun clientStatsDao(): ClientStatsDao
+    abstract fun serviceSessionDao(): ServiceSessionDao
 }

@@ -1,5 +1,6 @@
 package com.example.shieldshare.ui.monitoring
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.shieldshare.data.repository.TrafficRepository
@@ -51,14 +52,14 @@ class MonitoringViewModel @Inject constructor(
             }
         }
         
-        // Observe persistent client stats from database
+        // Observe service sessions from database
         // Use debounce and distinctUntilChanged to prevent excessive updates
         viewModelScope.launch {
-            trafficRepository.getAllClientStats()
+            trafficRepository.getAllServiceSessions()
                 .distinctUntilChanged() // Only emit when data actually changes
                 .debounce(500) // Wait 500ms after last emission before processing
-                .collect { persistentStats ->
-                    _uiState.value = _uiState.value.copy(persistentClientStats = persistentStats)
+                .collect { serviceSessions ->
+                    _uiState.value = _uiState.value.copy(serviceSessions = serviceSessions)
                 }
         }
 
@@ -151,6 +152,22 @@ class MonitoringViewModel @Inject constructor(
     fun refreshDatabaseStats() {
         loadDatabaseStats()
     }
+    
+    /**
+     * Load client traffic for a specific service session.
+     */
+    fun loadClientTrafficForSession(sessionId: String) {
+        viewModelScope.launch {
+            try {
+                val clientTraffic = trafficRepository.getClientTrafficForServiceSession(sessionId)
+                _uiState.value = _uiState.value.copy(
+                    clientTrafficPerSession = _uiState.value.clientTrafficPerSession + (sessionId to clientTraffic)
+                )
+            } catch (e: Exception) {
+                Log.e("MonitoringViewModel", "Error loading client traffic for session", e)
+            }
+        }
+    }
 }
 
 data class MonitoringUiState(
@@ -165,5 +182,7 @@ data class MonitoringUiState(
     val rawLogs: List<String> = emptyList(),
     // Persistent data from database
     val databaseStats: DatabaseStats? = null,
-    val persistentClientStats: List<com.example.shieldshare.data.db.ClientStatsEntity> = emptyList()
+    val serviceSessions: List<com.example.shieldshare.data.db.ServiceSessionEntity> = emptyList(),
+    // Client traffic per service session (sessionId -> Map<clientIp, Pair<bytesUp, bytesDown>>)
+    val clientTrafficPerSession: Map<String, Map<String, Pair<Long, Long>>> = emptyMap()
 )

@@ -5,10 +5,13 @@ import com.example.shieldshare.data.db.ClientSessionDao
 import com.example.shieldshare.data.db.ClientSessionEntity
 import com.example.shieldshare.data.db.ClientStatsDao
 import com.example.shieldshare.data.db.ClientStatsEntity
+import com.example.shieldshare.data.db.ServiceSessionDao
+import com.example.shieldshare.data.db.ServiceSessionEntity
 import com.example.shieldshare.data.db.TrafficRecordDao
 import com.example.shieldshare.data.db.TrafficRecordEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -20,9 +23,10 @@ import javax.inject.Singleton
  */
 @Singleton
 class TrafficRepository @Inject constructor(
-    private val trafficRecordDao: TrafficRecordDao,
-    private val clientSessionDao: ClientSessionDao,
-    private val clientStatsDao: ClientStatsDao
+        private val trafficRecordDao: TrafficRecordDao,
+        private val clientSessionDao: ClientSessionDao,
+        private val clientStatsDao: ClientStatsDao,
+        private val serviceSessionDao: ServiceSessionDao
 ) {
     companion object {
         private const val TAG = "TrafficRepository"
@@ -428,19 +432,152 @@ class TrafficRepository @Inject constructor(
 
     // ==================== Database Management ====================
 
+    // ==================== Service Session Operations ====================
+    
+    /**
+     * Start a new service session (when both proxy and VPN become active).
+     */
+    suspend fun startServiceSession(sessionId: String) {
+        withContext(Dispatchers.IO) {
+            try {
+                val session = ServiceSessionEntity(
+                    sessionId = sessionId,
+                    startTime = System.currentTimeMillis(),
+                    endTime = null,
+                    totalBytesUploaded = 0,
+                    totalBytesDownloaded = 0,
+                    uniqueClients = 0,
+                    isActive = true
+                )
+                serviceSessionDao.insert(session)
+                Log.d(TAG, "Started service session: $sessionId")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error starting service session", e)
+            }
+        }
+    }
+    
+    /**
+     * End a service session and calculate final statistics.
+     * Flushes any pending traffic records first to ensure accuracy.
+     */
+    suspend fun endServiceSession(sessionId: String) {
+        withContext(Dispatchers.IO) {
+            try {
+                // Flush any pending traffic records to ensure we have all data
+                flushTrafficRecords()
+                
+                val session = serviceSessionDao.getSession(sessionId)
+                if (session != null && session.isActive) {
+                    // Calculate total traffic and unique clients for this service session
+                    val startTime = session.startTime
+                    val endTime = System.currentTimeMillis()
+                    
+                    // Get all traffic records within this service session time range
+                    // Collect from Flow to get actual data
+                    var totalBytesUp = 0L
+                    var totalBytesDown = 0L
+                    val uniqueClientIps = mutableSetOf<String>()
+                    
+                    // Use first() to get the current snapshot from Flow
+                    val trafficRecords = trafficRecordDao.getTrafficInRange(startTime, endTime, 10000).first()
+                    
+                    // Aggregate traffic and count unique clients
+                    trafficRecords.forEach { record ->
+                        totalBytesUp += record.bytesUploaded
+                        totalBytesDown += record.bytesDownloaded
+                        uniqueClientIps.add(record.clientIp)
+                    }
+                    
+                    val updatedSession = session.copy(
+                        endTime = endTime,
+                        totalBytesUploaded = totalBytesUp,
+                        totalBytesDownloaded = totalBytesDown,
+                        uniqueClients = uniqueClientIps.size,
+                        isActive = false
+                    )
+                    
+                    serviceSessionDao.update(updatedSession)
+                    Log.d(TAG, "Ended service session: $sessionId - ${uniqueClientIps.size} clients, ↑${totalBytesUp}B ↓${totalBytesDown}B")
+                } else {
+                    Log.w(TAG, "Service session not found or already ended: $sessionId")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error ending service session", e)
+            }
+        }
+    }
+    
+    /**
+     * Get client traffic statistics for a specific service session.
+     * Returns a map of client IP to their traffic stats during this session.
+     */
+    suspend fun getClientTrafficForServiceSession(sessionId: String): Map<String, Pair<Long, Long>> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val session = serviceSessionDao.getSession(sessionId)
+                if (session != null) {
+                    val endTime = session.endTime ?: System.currentTimeMillis()
+                    val trafficRecords = trafficRecordDao.getTrafficInRange(
+                        session.startTime,
+                        endTime,
+                        10000
+                    ).first()
+                    
+                    // Aggregate by client IP
+                    val clientTraffic = mutableMapOf<String, Pair<Long, Long>>()
+                    trafficRecords.forEach { record ->
+                        val current = clientTraffic.getOrDefault(record.clientIp, Pair(0L, 0L))
+                        clientTraffic[record.clientIp] = Pair(
+                            current.first + record.bytesUploaded,
+                            current.second + record.bytesDownloaded
+                        )
+                    }
+                    
+                    clientTraffic
+                } else {
+                    emptyMap()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error getting client traffic for service session", e)
+                emptyMap()
+            }
+        }
+    }
+    
+    /**
+     * Get all service sessions.
+     */
+    fun getAllServiceSessions(): Flow<List<ServiceSessionEntity>> {
+        return serviceSessionDao.getAllSessions()
+    }
+    
+    /**
+     * Get active service session (if any).
+     */
+    suspend fun getActiveServiceSession(): ServiceSessionEntity? {
+        return withContext(Dispatchers.IO) {
+            try {
+                serviceSessionDao.getActiveSession()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error getting active service session", e)
+                null
+            }
+        }
+    }
+
     /**
      * Get database statistics.
      */
     suspend fun getDatabaseStats(): DatabaseStats {
         return withContext(Dispatchers.IO) {
             try {
-                val recordCount = trafficRecordDao.getRecordCount()
-                val sessionCount = clientSessionDao.getSessionCount()
+                val serviceSessionCount = serviceSessionDao.getSessionCount().toLong()
                 val clientCount = clientStatsDao.getClientCount()
 
                 DatabaseStats(
-                    totalRecords = recordCount,
-                    totalSessions = sessionCount,
+                    totalRecords = 0L, // Removed - not showing total records
+                    totalSessions = serviceSessionCount, // Now shows service sessions
                     uniqueClients = clientCount
                 )
             } catch (e: Exception) {
@@ -465,6 +602,7 @@ class TrafficRepository @Inject constructor(
                 trafficRecordDao.deleteAll()
                 clientSessionDao.deleteAll()
                 clientStatsDao.deleteAll()
+                serviceSessionDao.deleteAll()
 
                 Log.i(TAG, "All traffic data cleared from database")
             } catch (e: Exception) {

@@ -33,6 +33,36 @@ import javax.inject.Singleton
 object AppModule {
 
     /**
+     * Migration from version 2 to 3: Add service_sessions table
+     */
+    private val MIGRATION_2_3 = object : Migration(2, 3) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            // Create service_sessions table
+            database.execSQL("""
+                CREATE TABLE IF NOT EXISTS service_sessions (
+                    sessionId TEXT PRIMARY KEY NOT NULL,
+                    startTime INTEGER NOT NULL,
+                    endTime INTEGER,
+                    totalBytesUploaded INTEGER NOT NULL,
+                    totalBytesDownloaded INTEGER NOT NULL,
+                    uniqueClients INTEGER NOT NULL,
+                    isActive INTEGER NOT NULL
+                )
+            """.trimIndent())
+            
+            // Create index on startTime
+            database.execSQL("""
+                CREATE INDEX IF NOT EXISTS index_service_sessions_startTime ON service_sessions(startTime)
+            """.trimIndent())
+            
+            // Create index on endTime
+            database.execSQL("""
+                CREATE INDEX IF NOT EXISTS index_service_sessions_endTime ON service_sessions(endTime)
+            """.trimIndent())
+        }
+    }
+
+    /**
      * Migration from version 1 to 2: Add traffic tracking tables
      * Since we're only adding new tables (not modifying existing ones),
      * this migration is straightforward.
@@ -120,7 +150,7 @@ object AppModule {
     @Singleton
     fun provideDb(@ApplicationContext ctx: Context): AppDatabase =
             Room.databaseBuilder(ctx, AppDatabase::class.java, "shieldshare.db")
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
 
     @Provides

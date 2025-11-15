@@ -39,7 +39,8 @@ constructor(
         private val hotspotManager: HotspotManager,
         private val appPrefs: AppPrefs,
         private val ipProvider: IpAddressProvider,
-        private val trafficMeter: com.example.shieldshare.managers.meter.TrafficMeter
+        private val trafficMeter: com.example.shieldshare.managers.meter.TrafficMeter,
+        private val trafficRepository: com.example.shieldshare.data.repository.TrafficRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HomeUiState())
@@ -51,6 +52,7 @@ constructor(
     // Service Session tracking (starts when both proxy and VPN are active)
     private var serviceSessionStartTime: Long? = null
     private var serviceSessionUpdateJob: Job? = null
+    private var currentServiceSessionId: String? = null
 
     init {
         viewModelScope.launch { refreshIp() }
@@ -321,16 +323,34 @@ constructor(
         
         if (bothActive && serviceSessionStartTime == null) {
             // Start service session
+            val sessionId = java.util.UUID.randomUUID().toString()
+            currentServiceSessionId = sessionId
             serviceSessionStartTime = System.currentTimeMillis()
             startServiceSessionTimer()
-            Log.i("HomeViewModel", "Service session started")
+            
+            // Persist service session to database
+            viewModelScope.launch {
+                trafficRepository.startServiceSession(sessionId)
+            }
+            
+            Log.i("HomeViewModel", "Service session started: $sessionId")
         } else if (!bothActive && serviceSessionStartTime != null) {
             // End service session
+            val sessionId = currentServiceSessionId
             serviceSessionStartTime = null
+            currentServiceSessionId = null
             serviceSessionUpdateJob?.cancel()
             serviceSessionUpdateJob = null
             _uiState.value = _uiState.value.copy(serviceSessionUptime = null)
-            Log.i("HomeViewModel", "Service session ended")
+            
+            // Persist service session end to database
+            if (sessionId != null) {
+                viewModelScope.launch {
+                    trafficRepository.endServiceSession(sessionId)
+                }
+            }
+            
+            Log.i("HomeViewModel", "Service session ended: $sessionId")
         }
     }
     
