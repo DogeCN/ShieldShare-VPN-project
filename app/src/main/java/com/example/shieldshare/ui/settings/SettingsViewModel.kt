@@ -3,6 +3,7 @@ package com.example.shieldshare.ui.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.shieldshare.data.prefs.AppPrefs
+import com.example.shieldshare.data.repository.TrafficRepository
 import com.example.shieldshare.ui.theme.ThemeMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -15,7 +16,8 @@ import kotlinx.coroutines.launch
 class SettingsViewModel
 @Inject
 constructor(
-        private val appPrefs: AppPrefs
+        private val appPrefs: AppPrefs,
+        private val trafficRepository: TrafficRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState())
@@ -103,6 +105,45 @@ constructor(
             appPrefs.putBoolean("socks5_enabled", state.socks5Enabled)
         }
     }
+
+    /**
+     * Clear all traffic data from the database.
+     * Shows loading state during operation and error/success messages.
+     */
+    fun clearTrafficData() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(
+                isClearingDatabase = true,
+                clearDatabaseError = null,
+                clearDatabaseSuccess = false
+            )
+            
+            try {
+                trafficRepository.clearAllTrafficData()
+                _uiState.value = _uiState.value.copy(
+                    isClearingDatabase = false,
+                    clearDatabaseSuccess = true,
+                    clearDatabaseError = null
+                )
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isClearingDatabase = false,
+                    clearDatabaseSuccess = false,
+                    clearDatabaseError = "Failed to clear traffic data: ${e.message}"
+                )
+            }
+        }
+    }
+
+    /**
+     * Reset clear database UI state (called after showing snackbar).
+     */
+    fun resetClearDatabaseState() {
+        _uiState.value = _uiState.value.copy(
+            clearDatabaseSuccess = false,
+            clearDatabaseError = null
+        )
+    }
 }
 
 data class SettingsUiState(
@@ -111,5 +152,9 @@ data class SettingsUiState(
         val notificationsEnabled: Boolean = true,
         val httpHttpsEnabled: Boolean = true,
         val socks5Enabled: Boolean = true,
-        val validationError: String? = null
+        val validationError: String? = null,
+        // Clear database states
+        val isClearingDatabase: Boolean = false,
+        val clearDatabaseSuccess: Boolean = false,
+        val clearDatabaseError: String? = null
 )

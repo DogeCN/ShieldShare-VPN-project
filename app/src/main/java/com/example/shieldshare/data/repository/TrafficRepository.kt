@@ -60,15 +60,16 @@ class TrafficRepository @Inject constructor(
                     sessionId = sessionId
                 )
 
-                synchronized(trafficRecordBuffer) {
+                val shouldFlush = synchronized(trafficRecordBuffer) {
                     trafficRecordBuffer.add(record)
+                    val size = trafficRecordBuffer.size
+                    val timeSinceLastBatch = System.currentTimeMillis() - lastBatchTime
+                    size >= BATCH_SIZE || timeSinceLastBatch >= BATCH_TIMEOUT_MS
+                }
 
-                    val shouldFlush = trafficRecordBuffer.size >= BATCH_SIZE ||
-                            (System.currentTimeMillis() - lastBatchTime) >= BATCH_TIMEOUT_MS
-
-                    if (shouldFlush) {
-                        flushTrafficRecords()
-                    }
+                // Flush outside synchronized block if needed
+                if (shouldFlush) {
+                    flushTrafficRecords()
                 }
 
                 // Update client stats
@@ -89,6 +90,8 @@ class TrafficRepository @Inject constructor(
                 if (records.isNotEmpty()) {
                     trafficRecordDao.insertAll(records)
                     Log.d(TAG, "Inserted ${records.size} traffic records")
+                } else {
+                    // No-op when records list is empty
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error inserting traffic records", e)
@@ -103,14 +106,22 @@ class TrafficRepository @Inject constructor(
     suspend fun flushTrafficRecords() {
         withContext(Dispatchers.IO) {
             try {
-                synchronized(trafficRecordBuffer) {
+                val recordsToFlush = synchronized(trafficRecordBuffer) {
                     if (trafficRecordBuffer.isNotEmpty()) {
-                        trafficRecordDao.insertAll(trafficRecordBuffer.toList())
+                        val records = trafficRecordBuffer.toList()
                         val count = trafficRecordBuffer.size
                         trafficRecordBuffer.clear()
                         lastBatchTime = System.currentTimeMillis()
-                        Log.d(TAG, "Flushed $count traffic records to database")
+                        Pair(records, count)
+                    } else {
+                        null
                     }
+                }
+
+                // Insert outside synchronized block
+                recordsToFlush?.let { (records, count) ->
+                    trafficRecordDao.insertAll(records)
+                    Log.d(TAG, "Flushed $count traffic records to database")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error flushing traffic records", e)
@@ -239,6 +250,8 @@ class TrafficRepository @Inject constructor(
                         connectionCount = session.connectionCount + 1
                     )
                     clientSessionDao.update(updatedSession)
+                } else {
+                    // Session not found or not active - no-op
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error updating session traffic", e)
@@ -381,6 +394,8 @@ class TrafficRepository @Inject constructor(
                         lastUpdated = System.currentTimeMillis()
                     )
                     clientStatsDao.update(updatedStats)
+                } else {
+                    // Stats not found - no-op
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error updating device alias", e)
@@ -402,6 +417,8 @@ class TrafficRepository @Inject constructor(
                         lastUpdated = System.currentTimeMillis()
                     )
                     clientStatsDao.update(updatedStats)
+                } else {
+                    // Stats not found - no-op
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error incrementing session count", e)

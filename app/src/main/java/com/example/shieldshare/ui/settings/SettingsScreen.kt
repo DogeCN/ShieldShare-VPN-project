@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,6 +24,7 @@ fun SettingsScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
+    var showClearConfirmationDialog by remember { mutableStateOf(false) }
 
     // Show validation error snackbar
     LaunchedEffect(uiState.validationError) {
@@ -31,6 +33,28 @@ fun SettingsScreen(
                 message = error,
                 duration = SnackbarDuration.Short
             )
+        }
+    }
+
+    // Show clear database success snackbar
+    LaunchedEffect(uiState.clearDatabaseSuccess) {
+        if (uiState.clearDatabaseSuccess) {
+            snackbarHostState.showSnackbar(
+                message = "Traffic data cleared successfully",
+                duration = SnackbarDuration.Short
+            )
+            viewModel.resetClearDatabaseState()
+        }
+    }
+
+    // Show clear database error snackbar
+    LaunchedEffect(uiState.clearDatabaseError) {
+        uiState.clearDatabaseError?.let { error ->
+            snackbarHostState.showSnackbar(
+                message = error,
+                duration = SnackbarDuration.Long
+            )
+            viewModel.resetClearDatabaseState()
         }
     }
 
@@ -208,6 +232,62 @@ fun SettingsScreen(
         }
 
         item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "Data Management",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+
+                    Text(
+                        text = "Clear all stored traffic data from the database. This action cannot be undone.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Button(
+                        onClick = { showClearConfirmationDialog = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error
+                        ),
+                        enabled = !uiState.isClearingDatabase
+                    ) {
+                        if (uiState.isClearingDatabase) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = MaterialTheme.colorScheme.onError,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Clearing...")
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Clear Traffic Data")
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
             Button(
                 onClick = {
                     viewModel.saveSettings()
@@ -220,6 +300,51 @@ fun SettingsScreen(
             }
         }
         }
+    }
+
+    // Confirmation dialog for clearing database
+    if (showClearConfirmationDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearConfirmationDialog = false },
+            title = {
+                Text(
+                    text = "Clear Traffic Data",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = "Are you sure you want to delete all traffic data? This will permanently remove:\n\n" +
+                            "• All traffic records\n" +
+                            "• All session history\n" +
+                            "• All client statistics\n\n" +
+                            "This action cannot be undone.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showClearConfirmationDialog = false
+                        viewModel.clearTrafficData()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Clear All Data")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showClearConfirmationDialog = false }
+                ) {
+                    Text("Cancel")
+                }
+            },
+            containerColor = MaterialTheme.colorScheme.surface
+        )
     }
 }
 
