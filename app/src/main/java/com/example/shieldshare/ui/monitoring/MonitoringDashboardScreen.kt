@@ -80,6 +80,11 @@ fun MonitoringDashboardScreen(
         }
 
         item {
+            // Only show traffic stats if there's an active service session
+            val hasActiveServiceSession = remember(uiState.serviceSessions) {
+                uiState.serviceSessions.any { it.isActive }
+            }
+            
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -100,15 +105,17 @@ fun MonitoringDashboardScreen(
                             style = MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.SemiBold
                         )
-                        Text(
-                            text = "${uiState.trafficStats.size} client${if (uiState.trafficStats.size != 1) "s" else ""}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold
-                        )
+                        if (hasActiveServiceSession && uiState.trafficStats.isNotEmpty()) {
+                            Text(
+                                text = "${uiState.trafficStats.size} client${if (uiState.trafficStats.size != 1) "s" else ""}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                     
-                    if (uiState.trafficStats.isEmpty()) {
+                    if (!hasActiveServiceSession || uiState.trafficStats.isEmpty()) {
                         Text(
                             text = "No devices connected yet. Traffic will appear here once clients connect through the proxy.",
                             style = MaterialTheme.typography.bodyMedium,
@@ -240,22 +247,39 @@ fun MonitoringDashboardScreen(
                                     modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
                                 )
                             } else {
-                                // Use LazyColumn for better performance with many sessions
-                                // Use fixed height to avoid measurement overhead during expansion
-                                LazyColumn(
-                                    modifier = Modifier.height(600.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                                    contentPadding = PaddingValues(vertical = 4.dp)
-                                ) {
-                                    items(
-                                        items = completedSessions,
-                                        key = { it.sessionId }
-                                    ) { session ->
-                                        ServiceSessionCard(
-                                            session = session,
-                                            clientTraffic = uiState.clientTrafficPerSession[session.sessionId],
-                                            onExpand = { viewModel.loadClientTrafficForSession(session.sessionId) }
-                                        )
+                                // For small numbers of sessions, use Column for natural sizing
+                                // For many sessions, use LazyColumn with max height
+                                if (completedSessions.size <= 3) {
+                                    // Use Column for natural height when few sessions
+                                    Column(
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        completedSessions.forEach { session ->
+                                            ServiceSessionCard(
+                                                session = session,
+                                                clientTraffic = uiState.clientTrafficPerSession[session.sessionId],
+                                                onExpand = { viewModel.loadClientTrafficForSession(session.sessionId) }
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    // Use LazyColumn for better performance with many sessions
+                                    // Use max height to prevent stretching too tall
+                                    LazyColumn(
+                                        modifier = Modifier.heightIn(max = 600.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                                        contentPadding = PaddingValues(vertical = 4.dp)
+                                    ) {
+                                        items(
+                                            items = completedSessions,
+                                            key = { it.sessionId }
+                                        ) { session ->
+                                            ServiceSessionCard(
+                                                session = session,
+                                                clientTraffic = uiState.clientTrafficPerSession[session.sessionId],
+                                                onExpand = { viewModel.loadClientTrafficForSession(session.sessionId) }
+                                            )
+                                        }
                                     }
                                 }
                             }
