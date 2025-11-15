@@ -84,24 +84,6 @@ class TrafficRepository @Inject constructor(
         }
     }
 
-    /**
-     * Insert traffic records in batch.
-     * Useful when you already have a collection of records ready.
-     */
-    suspend fun insertTrafficRecords(records: List<TrafficRecordEntity>) {
-        withContext(Dispatchers.IO) {
-            try {
-                if (records.isNotEmpty()) {
-                    trafficRecordDao.insertAll(records)
-                    Log.d(TAG, "Inserted ${records.size} traffic records")
-                } else {
-                    // No-op when records list is empty
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error inserting traffic records", e)
-            }
-        }
-    }
 
     /**
      * Flush buffered traffic records to database.
@@ -134,35 +116,15 @@ class TrafficRepository @Inject constructor(
     }
 
     /**
-     * Get traffic records for a specific client within a time range.
-     */
-    fun getTrafficForClient(
-        clientIp: String,
-        startTime: Long,
-        endTime: Long
-    ): Flow<List<TrafficRecordEntity>> {
-        return trafficRecordDao.getTrafficForClient(clientIp, startTime, endTime)
-    }
-
-    /**
      * Get all traffic records within a time range.
+     * Used internally for aggregating service session data.
      */
-    fun getTrafficInRange(
+    private fun getTrafficInRange(
         startTime: Long,
         endTime: Long,
         limit: Int = 1000
     ): Flow<List<TrafficRecordEntity>> {
         return trafficRecordDao.getTrafficInRange(startTime, endTime, limit)
-    }
-
-    /**
-     * Get traffic records for a client (all time).
-     */
-    fun getTrafficForClientAllTime(
-        clientIp: String,
-        limit: Int = 1000
-    ): Flow<List<TrafficRecordEntity>> {
-        return trafficRecordDao.getTrafficForClientAllTime(clientIp, limit)
     }
 
     // ==================== Session Operations ====================
@@ -236,60 +198,6 @@ class TrafficRepository @Inject constructor(
         }
     }
 
-    /**
-     * Update session traffic during an active session.
-     */
-    suspend fun updateSessionTraffic(
-        sessionId: String,
-        bytesUploaded: Long,
-        bytesDownloaded: Long
-    ) {
-        withContext(Dispatchers.IO) {
-            try {
-                val session = clientSessionDao.getSession(sessionId)
-                if (session != null && session.isActive) {
-                    val updatedSession = session.copy(
-                        totalBytesUploaded = session.totalBytesUploaded + bytesUploaded,
-                        totalBytesDownloaded = session.totalBytesDownloaded + bytesDownloaded,
-                        connectionCount = session.connectionCount + 1
-                    )
-                    clientSessionDao.update(updatedSession)
-                } else {
-                    // Session not found or not active - no-op
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error updating session traffic", e)
-            }
-        }
-    }
-
-    /**
-     * Get sessions for a specific client.
-     */
-    fun getSessionsForClient(
-        clientIp: String,
-        limit: Int = 100
-    ): Flow<List<ClientSessionEntity>> {
-        return clientSessionDao.getSessionsForClient(clientIp, limit)
-    }
-
-    /**
-     * Get all active sessions.
-     */
-    fun getActiveSessions(): Flow<List<ClientSessionEntity>> {
-        return clientSessionDao.getActiveSessions()
-    }
-
-    /**
-     * Get sessions within a time range.
-     */
-    fun getSessionsInRange(
-        startTime: Long,
-        endTime: Long,
-        limit: Int = 1000
-    ): Flow<List<ClientSessionEntity>> {
-        return clientSessionDao.getSessionsInRange(startTime, endTime, limit)
-    }
 
     // ==================== Client Stats Operations ====================
 
@@ -340,72 +248,6 @@ class TrafficRepository @Inject constructor(
         }
     }
 
-    /**
-     * Get stats for a specific client.
-     */
-    suspend fun getClientStats(clientIp: String): ClientStatsEntity? {
-        return withContext(Dispatchers.IO) {
-            try {
-                clientStatsDao.getClientStats(clientIp)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error getting client stats", e)
-                null
-            }
-        }
-    }
-
-    /**
-     * Get stats for a specific client as Flow.
-     */
-    fun getClientStatsFlow(clientIp: String): Flow<ClientStatsEntity?> {
-        return clientStatsDao.getClientStatsFlow(clientIp)
-    }
-
-    /**
-     * Get all client stats.
-     */
-    fun getAllClientStats(): Flow<List<ClientStatsEntity>> {
-        return clientStatsDao.getAllClientStats()
-    }
-
-    /**
-     * Get top clients by total traffic.
-     */
-    fun getTopClients(limit: Int = 10): Flow<List<ClientStatsEntity>> {
-        return clientStatsDao.getTopClients(limit)
-    }
-
-    /**
-     * Get clients seen within a time range.
-     */
-    fun getClientsInRange(
-        startTime: Long,
-        endTime: Long
-    ): Flow<List<ClientStatsEntity>> {
-        return clientStatsDao.getClientsInRange(startTime, endTime)
-    }
-
-    /**
-     * Update device alias for a client.
-     */
-    suspend fun updateDeviceAlias(clientIp: String, alias: String?) {
-        withContext(Dispatchers.IO) {
-            try {
-                val stats = clientStatsDao.getClientStats(clientIp)
-                if (stats != null) {
-                    val updatedStats = stats.copy(
-                        deviceAlias = alias,
-                        lastUpdated = System.currentTimeMillis()
-                    )
-                    clientStatsDao.update(updatedStats)
-                } else {
-                    // Stats not found - no-op
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error updating device alias", e)
-            }
-        }
-    }
 
     /**
      * Increment session count for a client.
@@ -429,8 +271,6 @@ class TrafficRepository @Inject constructor(
             }
         }
     }
-
-    // ==================== Database Management ====================
 
     // ==================== Service Session Operations ====================
     
@@ -481,7 +321,7 @@ class TrafficRepository @Inject constructor(
                     val uniqueClientIps = mutableSetOf<String>()
                     
                     // Use first() to get the current snapshot from Flow
-                    val trafficRecords = trafficRecordDao.getTrafficInRange(startTime, endTime, 10000).first()
+                    val trafficRecords = getTrafficInRange(startTime, endTime, 10000).first()
                     
                     // Aggregate traffic and count unique clients
                     trafficRecords.forEach { record ->
@@ -522,7 +362,7 @@ class TrafficRepository @Inject constructor(
                 val session = serviceSessionDao.getSession(sessionId)
                 if (session != null) {
                     val endTime = session.endTime ?: System.currentTimeMillis()
-                    val trafficRecords = trafficRecordDao.getTrafficInRange(
+                    val trafficRecords = getTrafficInRange(
                         session.startTime,
                         endTime,
                         10000
@@ -588,7 +428,7 @@ class TrafficRepository @Inject constructor(
                 val uniqueClientIps = mutableSetOf<String>()
                 completedSessions.forEach { session ->
                     val endTime = session.endTime ?: System.currentTimeMillis()
-                    val trafficRecords = trafficRecordDao.getTrafficInRange(
+                    val trafficRecords = getTrafficInRange(
                         session.startTime,
                         endTime,
                         10000
@@ -636,53 +476,6 @@ class TrafficRepository @Inject constructor(
         }
     }
 
-    /**
-     * Delete old records before a specified timestamp.
-     * Useful for implementing data retention policies.
-     */
-    suspend fun deleteOldRecords(beforeTimestamp: Long): Int {
-        return withContext(Dispatchers.IO) {
-            try {
-                val recordsDeleted = trafficRecordDao.deleteOlderThan(beforeTimestamp)
-                val sessionsDeleted = clientSessionDao.deleteOlderThan(beforeTimestamp)
-                val statsDeleted = clientStatsDao.deleteOlderThan(beforeTimestamp)
-
-                Log.i(TAG, "Deleted old records: $recordsDeleted records, $sessionsDeleted sessions, $statsDeleted stats")
-                recordsDeleted + sessionsDeleted + statsDeleted
-            } catch (e: Exception) {
-                Log.e(TAG, "Error deleting old records", e)
-                0
-            }
-        }
-    }
-
-    /**
-     * Get count of traffic records for a specific client.
-     */
-    suspend fun getRecordCountForClient(clientIp: String): Long {
-        return withContext(Dispatchers.IO) {
-            try {
-                trafficRecordDao.getRecordCountForClient(clientIp)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error getting record count for client", e)
-                0L
-            }
-        }
-    }
-
-    /**
-     * Get count of sessions for a specific client.
-     */
-    suspend fun getSessionCountForClient(clientIp: String): Long {
-        return withContext(Dispatchers.IO) {
-            try {
-                clientSessionDao.getSessionCountForClient(clientIp)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error getting session count for client", e)
-                0L
-            }
-        }
-    }
     
     /**
      * Get aggregated traffic data for all unique IPs across all time.
@@ -693,7 +486,7 @@ class TrafficRepository @Inject constructor(
             try {
                 // Get all traffic records (with a reasonable limit to avoid memory issues)
                 // We'll aggregate by client IP
-                val allRecords = trafficRecordDao.getTrafficInRange(
+                val allRecords = getTrafficInRange(
                     startTime = 0L,
                     endTime = Long.MAX_VALUE,
                     limit = 50000 // Large limit to get all records
