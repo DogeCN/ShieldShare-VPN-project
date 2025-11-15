@@ -66,7 +66,9 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
                 .background(MaterialTheme.colorScheme.background)
-                .padding(16.dp)
+                .padding(horizontal = 12.dp)
+                .padding(top = 12.dp)
+                .padding(bottom = 6.dp)
                 .safeDrawingPadding(),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
