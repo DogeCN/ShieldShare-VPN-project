@@ -56,6 +56,42 @@ constructor(
 
     init {
         viewModelScope.launch { refreshIp() }
+        
+        // On app launch, end any active service sessions from previous app instance
+        // This ensures we always start fresh, even if VPN and proxy are already running
+        viewModelScope.launch {
+            try {
+                val activeSession = trafficRepository.getActiveServiceSession()
+                if (activeSession != null) {
+                    Log.i("HomeViewModel", "Found active session from previous app instance, ending it: ${activeSession.sessionId}")
+                    trafficRepository.endServiceSession(activeSession.sessionId)
+                }
+                
+                // After ending any active session, check if both VPN and proxy are already running
+                // If so, start a new session (this handles the case where app was closed but services kept running)
+                delay(1000) // Small delay to ensure state is updated
+                val proxyInfo = proxyServer.getProxyInfo()
+                val vpnStatus = vpnManager.getConnectionStatus()
+                val bothActive = proxyInfo.isRunning && vpnStatus == VpnStatus.CONNECTED
+                
+                if (bothActive) {
+                    // Update UI state to reflect current status
+                    _uiState.value = _uiState.value.copy(
+                        isProxyRunning = proxyInfo.isRunning,
+                        isVpnConnected = true,
+                        httpPort = proxyInfo.httpPort,
+                        httpsPort = proxyInfo.httpsPort,
+                        socks5Port = proxyInfo.socks5Port,
+                        proxyType = proxyInfo.proxyType,
+                        pacUrl = proxyInfo.pacFileUrl
+                    )
+                    // This will start a new service session
+                    updateServiceSessionState()
+                }
+            } catch (e: Exception) {
+                Log.e("HomeViewModel", "Error ending active session on app launch", e)
+            }
+        }
 
         // Observe VPN status changes
         viewModelScope.launch {
@@ -512,6 +548,33 @@ constructor(
             Log.e("HomeViewModel", "Failed to generate QR code", e)
             return null
         }
+    }
+    
+    /**
+     * Called when the ViewModel is being cleared (e.g., when app is closed).
+     * End any active service session to persist it to the database.
+     */
+    override fun onCleared() {
+        super.onCleared()
+        
+        // End active service session if one exists
+        val sessionId = currentServiceSessionId
+        if (sessionId != null) {
+            Log.i("HomeViewModel", "App closing, ending service session: $sessionId")
+            // Use runBlocking to ensure the session is ended before the ViewModel is destroyed
+            // This is safe here because onCleared is called on the main thread
+            kotlinx.coroutines.runBlocking {
+                try {
+                    trafficRepository.endServiceSession(sessionId)
+                } catch (e: Exception) {
+                    Log.e("HomeViewModel", "Error ending service session on app close", e)
+                }
+            }
+        }
+        
+        // Cancel all jobs
+        serviceSessionUpdateJob?.cancel()
+        ipAutoJob?.cancel()
     }
 }
 
