@@ -149,7 +149,7 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
                                         uploadSpeed = uiState.uploadSpeed,
                                         downloadSpeed = uiState.downloadSpeed,
                                         connections = uiState.activeConnections,
-                                        latency = uiState.latency
+                                        serviceSessionUptime = uiState.serviceSessionUptime
                                 )
 
                                 // Control cards
@@ -285,7 +285,7 @@ fun StatusCard(
         uploadSpeed: String,
         downloadSpeed: String,
         connections: Int,
-        latency: String
+        serviceSessionUptime: Long? // Uptime in milliseconds, null if session not active
 ) {
         Card(
                 modifier = Modifier.fillMaxWidth().height(70.dp),
@@ -355,7 +355,7 @@ fun StatusCard(
                                 // Connections
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                         Text(
-                                                text = "Connections",
+                                                text = "Clients",
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -377,15 +377,15 @@ fun StatusCard(
                                                         )
                                 )
 
-                                // Latency
+                                // Service Session Uptime
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                         Text(
-                                                text = "Latency",
+                                                text = "Uptime",
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                         Text(
-                                                text = latency,
+                                                text = serviceSessionUptime?.let { formatUptime(it) } ?: "—",
                                                 style = MaterialTheme.typography.bodyMedium,
                                                 color = MaterialTheme.colorScheme.onBackground,
                                                 fontWeight = FontWeight.Medium
@@ -678,6 +678,22 @@ fun QrCodeDialog(onDismiss: () -> Unit, viewModel: HomeViewModel, uiState: HomeU
                 },
                 confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
         )
+}
+
+/**
+ * Format uptime in milliseconds to human-readable string (e.g., "2h 15m 30s").
+ */
+private fun formatUptime(millis: Long): String {
+    val totalSeconds = millis / 1000
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    
+    return when {
+        hours > 0 -> "${hours}h ${minutes}m ${seconds}s"
+        minutes > 0 -> "${minutes}m ${seconds}s"
+        else -> "${seconds}s"
+    }
 }
 
 @Composable

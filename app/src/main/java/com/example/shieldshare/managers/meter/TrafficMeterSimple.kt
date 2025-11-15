@@ -2,6 +2,7 @@ package com.example.shieldshare.managers.meter
 
 import android.content.Context
 import android.util.Log
+import com.example.shieldshare.data.repository.TrafficRepository
 import kotlinx.coroutines.*
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
@@ -19,10 +20,12 @@ import javax.inject.Singleton
  * - Real-time traffic statistics (upload/download bytes)
  * - Client IP tracking
  * - Basic session management
+ * - Persistent storage via TrafficRepository
  */
 @Singleton
 class TrafficMeterSimple @Inject constructor(
-    private val context: Context
+    private val context: Context,
+    private val trafficRepository: TrafficRepository
 ) : TrafficMeter {
     
     companion object {
@@ -64,6 +67,8 @@ class TrafficMeterSimple @Inject constructor(
     
     /**
      * MAIN TRAFFIC RECORDING METHOD - Called by proxy handlers
+     * 
+     * Records traffic both in-memory (for real-time display) and persistently (via repository).
      */
     override fun recordTraffic(clientIp: String, bytesUp: Long, bytesDown: Long) {
         scope.launch {
@@ -77,6 +82,12 @@ class TrafficMeterSimple @Inject constructor(
                 
                 // Update or create client stats - use normalized IP as key
                 val currentStats = clientStats[normalizedIp]
+                val macAddress = if (currentStats != null) {
+                    currentStats.macAddress
+                } else {
+                    resolveMacAddress(normalizedIp) // Resolve MAC address for new clients
+                }
+                
                 val updatedStats = if (currentStats != null) {
                     currentStats.copy(
                         totalBytesUp = currentStats.totalBytesUp + bytesUp,
@@ -87,7 +98,7 @@ class TrafficMeterSimple @Inject constructor(
                 } else {
                     ClientTrafficStats(
                         clientId = normalizedIp,
-                        macAddress = resolveMacAddress(normalizedIp), // Resolve MAC address
+                        macAddress = macAddress,
                         ipAddress = normalizedIp,
                         totalBytesUp = bytesUp,
                         totalBytesDown = bytesDown,
@@ -96,10 +107,27 @@ class TrafficMeterSimple @Inject constructor(
                     )
                 }
                 
+                // Update in-memory cache (for real-time UI display)
                 clientStats[normalizedIp] = updatedStats
 
+                // Determine protocol from active session if available
+                val activeSession = activeSessions.values.find { 
+                    it.clientIp == normalizedIp && it.isActive 
+                }
+                val protocol = activeSession?.protocolType ?: "HTTP" // Default to HTTP if unknown
+
+                // Persist to database via repository (batched automatically)
+                trafficRepository.recordTraffic(
+                    clientIp = normalizedIp,
+                    macAddress = macAddress,
+                    bytesUploaded = bytesUp,
+                    bytesDownloaded = bytesDown,
+                    protocol = protocol,
+                    sessionId = activeSession?.sessionId
+                )
+
                 Log.d(TAG, "Traffic recorded for $normalizedIp (from $clientIp): ↑${bytesUp}B ↓${bytesDown}B")
-                addRawLog("Traffic recorded for $normalizedIp (${updatedStats.macAddress}): ↑${bytesUp}B ↓${bytesDown}B")
+                addRawLog("Traffic recorded for $normalizedIp (${macAddress}): ↑${bytesUp}B ↓${bytesDown}B")
             } catch (e: Exception) {
                 Log.e(TAG, "Error recording traffic for $clientIp", e)
             }
@@ -108,10 +136,17 @@ class TrafficMeterSimple @Inject constructor(
     
     /**
      * START SESSION - Called when new connection starts
+     * 
+     * Creates session both in-memory (for real-time tracking) and persistently (via repository).
      */
     fun startSession(clientIp: String, protocolType: String): String {
         val normalizedIp = normalizeIpAddress(clientIp)
         val sessionId = UUID.randomUUID().toString()
+        
+        // Get or resolve MAC address
+        val currentStats = clientStats[normalizedIp]
+        val macAddress = currentStats?.macAddress ?: resolveMacAddress(normalizedIp)
+        
         val session = TrafficSession(
             sessionId = sessionId,
             clientIp = normalizedIp,
@@ -119,8 +154,26 @@ class TrafficMeterSimple @Inject constructor(
             protocolType = protocolType
         )
         
+        // Store in-memory (for real-time tracking)
         activeSessions[sessionId] = session
         totalConnections.incrementAndGet()
+        
+        // Persist to database via repository
+        scope.launch {
+            try {
+                val deviceName = currentStats?.deviceAlias
+                trafficRepository.startSession(
+                    sessionId = sessionId,
+                    clientIp = normalizedIp,
+                    macAddress = macAddress,
+                    protocolType = protocolType,
+                    deviceName = deviceName,
+                    userAgent = null // Can be enhanced later if available
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Error persisting session start", e)
+            }
+        }
         
         Log.i(TAG, "Session started: $sessionId for $normalizedIp ($protocolType)")
         return sessionId
@@ -128,12 +181,33 @@ class TrafficMeterSimple @Inject constructor(
     
     /**
      * END SESSION - Called when connection ends
+     * 
+     * Ends session both in-memory and persistently (via repository).
      */
     fun endSession(sessionId: String) {
         val session = activeSessions.remove(sessionId)
         if (session != null) {
             session.endTime = Date()
             session.isActive = false
+            
+            // Persist session end to database via repository
+            scope.launch {
+                try {
+                    trafficRepository.endSession(
+                        sessionId = sessionId,
+                        totalBytesUploaded = session.bytesUploaded,
+                        totalBytesDownloaded = session.bytesDownloaded,
+                        connectionCount = session.connectionCount,
+                        hostsAccessed = session.hostsAccessed.toList().takeIf { it.isNotEmpty() }
+                    )
+                    
+                    // Increment session count for this client
+                    trafficRepository.incrementSessionCount(session.clientIp)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error persisting session end", e)
+                }
+            }
+            
             Log.i(TAG, "Session ended: $sessionId (${session.clientIp})")
         }
     }
@@ -258,11 +332,19 @@ class TrafficMeterSimple @Inject constructor(
     
     /**
      * Periodic logging for monitoring
+     * Also flushes any pending traffic records to database periodically
      */
     private fun startPeriodicLogging() {
         scope.launch {
             while (true) {
                 delay(30_000) // Log every 30 seconds
+                
+                // Flush any pending traffic records to database
+                try {
+                    trafficRepository.flushTrafficRecords()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error flushing traffic records", e)
+                }
                 
                 val totalUp = totalBytesUp.get()
                 val totalDown = totalBytesDown.get()

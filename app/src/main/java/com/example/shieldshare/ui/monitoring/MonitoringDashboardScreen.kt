@@ -1,12 +1,19 @@
 package com.example.shieldshare.ui.monitoring
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.ripple.rememberRipple
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -15,9 +22,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.hilt.navigation.compose.hiltViewModel
 import java.text.SimpleDateFormat
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.*
 
 @Composable
@@ -30,7 +43,9 @@ fun MonitoringDashboardScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            .padding(16.dp)
+            .padding(horizontal = 12.dp)
+            .padding(top = 12.dp)
+            .padding(bottom = 6.dp)
             .safeDrawingPadding(),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
@@ -58,13 +73,7 @@ fun MonitoringDashboardScreen(
                     )
                     
                     Text(
-                        text = "Proxy Status: ${if (uiState.isProxyRunning) "Running" else "Stopped"}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    
-                    Text(
-                        text = "Active Connections: ${uiState.activeConnections}",
+                        text = "Proxy Status: ${if (uiState.isProxyRunning) "RUNNING" else "STOPPED"}",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Bold
                     )
@@ -73,6 +82,11 @@ fun MonitoringDashboardScreen(
         }
 
         item {
+            // Only show traffic stats if there's an active service session
+            val hasActiveServiceSession = remember(uiState.serviceSessions) {
+                uiState.serviceSessions.any { it.isActive }
+            }
+            
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -93,15 +107,17 @@ fun MonitoringDashboardScreen(
                             style = MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.SemiBold
                         )
-                        Text(
-                            text = "${uiState.trafficStats.size} client${if (uiState.trafficStats.size != 1) "s" else ""}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold
-                        )
+                        if (hasActiveServiceSession && uiState.trafficStats.isNotEmpty()) {
+                            Text(
+                                text = "${uiState.trafficStats.size} client${if (uiState.trafficStats.size != 1) "s" else ""}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                     
-                    if (uiState.trafficStats.isEmpty()) {
+                    if (!hasActiveServiceSession || uiState.trafficStats.isEmpty()) {
                         Text(
                             text = "No devices connected yet. Traffic will appear here once clients connect through the proxy.",
                             style = MaterialTheme.typography.bodyMedium,
@@ -110,22 +126,569 @@ fun MonitoringDashboardScreen(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp)
                         )
                     } else {
-                        // Sort devices by total traffic (descending)
-                        val sortedDevices = uiState.trafficStats.sortedByDescending { 
-                            it.totalBytesUp + it.totalBytesDown 
+                        // Sort devices by total traffic (descending) - use remember to avoid recomputing
+                        val sortedDevices = remember(uiState.trafficStats) {
+                            uiState.trafficStats.sortedByDescending { 
+                                it.totalBytesUp + it.totalBytesDown 
+                            }
                         }
                         
-                        LazyColumn(
-                            modifier = Modifier.heightIn(max = 400.dp),
+                        // Use Column instead of LazyColumn to avoid nested scrolling
+                        Column(
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            items(sortedDevices) { device ->
+                            sortedDevices.forEach { device ->
                                 DeviceTrafficCard(device = device)
                             }
                         }
                     }
                 }
             }
+        }
+
+        // Persistent Data Section
+        item {
+            var expanded by remember { mutableStateOf(false) }
+            
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Header - clickable to expand/collapse with rounded ripple
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable(
+                                indication = rememberRipple(bounded = true),
+                                interactionSource = remember { MutableInteractionSource() }
+                            ) { expanded = !expanded },
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Historical Session Data",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                        Icon(
+                            imageVector = if (expanded) 
+                                Icons.Default.ExpandLess 
+                            else 
+                                Icons.Default.ExpandMore,
+                            contentDescription = if (expanded) "Collapse" else "Expand",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                    }
+                    
+                    // Simple conditional rendering - no animations to avoid lag
+                    if (expanded) {
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            // Database Statistics
+                            uiState.databaseStats?.let { stats ->
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Column {
+                                            Text(
+                                                text = "Service Sessions",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Text(
+                                                text = "${stats.totalSessions}",
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                fontWeight = FontWeight.Bold,
+                                                fontFamily = FontFamily.Monospace
+                                            )
+                                        }
+                                        Column {
+                                            Text(
+                                                text = "Unique Clients",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Text(
+                                                text = "${stats.uniqueClients}",
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                fontWeight = FontWeight.Bold,
+                                                fontFamily = FontFamily.Monospace
+                                            )
+                                        }
+                                    }
+                                }
+                                Divider()
+                            }
+
+                            // Service Sessions (only show completed sessions, not active ones)
+                            val completedSessions = remember(uiState.serviceSessions) {
+                                uiState.serviceSessions.filter { !it.isActive }
+                            }
+                            
+                            if (completedSessions.isEmpty()) {
+                                Text(
+                                    text = "No completed service sessions yet. Completed sessions will appear here after they end.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                                )
+                            } else {
+                                // For small numbers of sessions, use Column for natural sizing
+                                // For many sessions, use LazyColumn with max height
+                                if (completedSessions.size <= 3) {
+                                    // Use Column for natural height when few sessions
+                                    Column(
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        completedSessions.forEach { session ->
+                                            ServiceSessionCard(
+                                                session = session,
+                                                clientTraffic = uiState.clientTrafficPerSession[session.sessionId],
+                                                onExpand = { viewModel.loadClientTrafficForSession(session.sessionId) }
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    // Use LazyColumn for better performance with many sessions
+                                    // Use max height to prevent stretching too tall
+                                    LazyColumn(
+                                        modifier = Modifier.heightIn(max = 600.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                                        contentPadding = PaddingValues(vertical = 4.dp)
+                                    ) {
+                                        items(
+                                            items = completedSessions,
+                                            key = { it.sessionId }
+                                        ) { session ->
+                                            ServiceSessionCard(
+                                                session = session,
+                                                clientTraffic = uiState.clientTrafficPerSession[session.sessionId],
+                                                onExpand = { viewModel.loadClientTrafficForSession(session.sessionId) }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Unique IP Traffic Summary Card
+        item {
+            var expanded by remember { mutableStateOf(false) }
+            
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Header - clickable to expand/collapse with rounded ripple
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable(
+                                indication = rememberRipple(bounded = true),
+                                interactionSource = remember { MutableInteractionSource() }
+                            ) { expanded = !expanded },
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Historical Usage by IP",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                        Icon(
+                            imageVector = if (expanded) 
+                                Icons.Default.ExpandLess 
+                            else 
+                                Icons.Default.ExpandMore,
+                            contentDescription = if (expanded) "Collapse" else "Expand",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                    }
+                    
+                    // Simple conditional rendering - no heavy animations
+                    if (expanded) {
+                        if (uiState.uniqueIpTrafficSummary.isEmpty()) {
+                            Text(
+                                text = "No traffic data available yet.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp)
+                            )
+                        } else {
+                            // Sort by total traffic (descending)
+                            val sortedIps = remember(uiState.uniqueIpTrafficSummary) {
+                                uiState.uniqueIpTrafficSummary.toList().sortedByDescending { 
+                                    it.second.first + it.second.second 
+                                }
+                            }
+                            
+                            // Use Column instead of LazyColumn to avoid nested scrolling
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                sortedIps.forEach { (ip, traffic) ->
+                                    UniqueIpTrafficRow(
+                                        ip = ip,
+                                        bytesUp = traffic.first,
+                                        bytesDown = traffic.second
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ServiceSessionCard(
+    session: com.example.shieldshare.data.db.ServiceSessionEntity,
+    clientTraffic: Map<String, Pair<Long, Long>>?,
+    onExpand: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    
+    // Calculate uptime
+    val uptime = remember(session.startTime, session.endTime) {
+        val endTime = session.endTime ?: System.currentTimeMillis()
+        endTime - session.startTime
+    }
+    
+    // Format dates
+    val startTimeFormatted = remember(session.startTime) {
+        val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+            .withZone(ZoneId.systemDefault())
+        formatter.format(Instant.ofEpochMilli(session.startTime))
+    }
+    val endTimeFormatted = remember(session.endTime) {
+        session.endTime?.let {
+            val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+                .withZone(ZoneId.systemDefault())
+            formatter.format(Instant.ofEpochMilli(it))
+        } ?: "Active"
+    }
+    
+    // Total bytes
+    val totalBytes = remember(session.totalBytesUploaded, session.totalBytesDownloaded) {
+        session.totalBytesUploaded + session.totalBytesDownloaded
+    }
+    
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // Header - clickable to expand with rounded ripple
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(
+                        indication = rememberRipple(bounded = true),
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) { 
+                        expanded = !expanded
+                        if (expanded && clientTraffic == null) {
+                            onExpand()
+                        }
+                    },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Service Session",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = formatUptime(uptime),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+                Icon(
+                    imageVector = if (expanded) 
+                        Icons.Default.ExpandLess 
+                    else 
+                        Icons.Default.ExpandMore,
+                    contentDescription = if (expanded) "Collapse" else "Expand",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            
+            // Summary stats (always visible)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column {
+                    Text(
+                        text = "↑ Upload",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = formatBytes(session.totalBytesUploaded),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+                Column {
+                    Text(
+                        text = "Total",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = formatBytes(totalBytes),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+                Column {
+                    Text(
+                        text = "↓ Download",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = formatBytes(session.totalBytesDownloaded),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+            
+            // Expanded content
+            if (expanded) {
+                Divider()
+                
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Session details
+                    Text(
+                        text = "Session Details",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Medium
+                    )
+
+                    Column {
+                        Column {
+                            Text(
+                                text = "Started",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = startTimeFormatted,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Column {
+                            Text(
+                                text = "Ended",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = endTimeFormatted,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                    
+                    Text(
+                        text = "Clients: ${session.uniqueClients}",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    
+                    // Client traffic breakdown
+                    if (clientTraffic != null) {
+                        if (clientTraffic.isNotEmpty()) {
+                            Divider()
+                            Text(
+                                text = "Client Traffic",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Medium
+                            )
+                            
+                            val sortedClients = clientTraffic.toList().sortedByDescending { 
+                                it.second.first + it.second.second 
+                            }
+                            
+                            sortedClients.forEach { (clientIp, traffic) ->
+                                ClientTrafficRow(
+                                    clientIp = clientIp,
+                                    bytesUp = traffic.first,
+                                    bytesDown = traffic.second
+                                )
+                            }
+                        } else {
+                            // Empty client traffic (no clients or all zeros)
+                            Divider()
+                            Text(
+                                text = "No client traffic data for this session.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(vertical = 4.dp)
+                            )
+                        }
+                    } else if (expanded) {
+                        // Loading indicator - only show if we're actually loading
+                        Text(
+                            text = "Loading client traffic...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ClientTrafficRow(
+    clientIp: String,
+    bytesUp: Long,
+    bytesDown: Long
+) {
+    val totalBytes = bytesUp + bytesDown
+    
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = clientIp,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                text = "↑${formatBytes(bytesUp)} ↓${formatBytes(bytesDown)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontFamily = FontFamily.Monospace
+            )
+        }
+        Text(
+            text = formatBytes(totalBytes),
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace
+        )
+    }
+}
+
+@Composable
+private fun UniqueIpTrafficRow(
+    ip: String,
+    bytesUp: Long,
+    bytesDown: Long
+) {
+    val totalBytes = bytesUp + bytesDown
+    
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // IP address - use smaller font and allow natural width
+        Text(
+            text = ip,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            fontFamily = FontFamily.Monospace,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        // Traffic stats - use smaller spacing and compact layout
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "↑${formatBytes(bytesUp)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                fontFamily = FontFamily.Monospace
+            )
+            Text(
+                text = formatBytes(totalBytes),
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace
+            )
+            Text(
+                text = "↓${formatBytes(bytesDown)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.tertiary,
+                fontFamily = FontFamily.Monospace
+            )
         }
     }
 }
@@ -165,12 +728,42 @@ private fun formatTimeSince(timestamp: Long): String {
     }
 }
 
+// Helper function to format uptime (duration in milliseconds)
+private fun formatUptime(millis: Long): String {
+    val totalSeconds = millis / 1000
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    
+    return when {
+        hours > 0 -> "${hours}h ${minutes}m ${seconds}s"
+        minutes > 0 -> "${minutes}m ${seconds}s"
+        else -> "${seconds}s"
+    }
+}
+
+// Helper function to format date and time
+private fun formatDateTime(timestamp: Long): String {
+    val dateFormat = java.text.SimpleDateFormat("MMM dd, yyyy HH:mm:ss", java.util.Locale.getDefault())
+    return dateFormat.format(java.util.Date(timestamp))
+}
+
 @Composable
 private fun DeviceTrafficCard(device: com.example.shieldshare.managers.meter.ClientTrafficStats) {
-    val totalBytes = device.totalBytesUp + device.totalBytesDown
-    val uploadPercent = if (totalBytes > 0) {
-        (device.totalBytesUp.toFloat() / totalBytes.toFloat() * 100).toInt()
-    } else 0
+    var expanded by remember { mutableStateOf(false) }
+    
+    // Use remember to avoid recalculating on every recomposition
+    val totalBytes = remember(device.totalBytesUp, device.totalBytesDown) {
+        device.totalBytesUp + device.totalBytesDown
+    }
+    val uploadPercent = remember(device.totalBytesUp, totalBytes) {
+        if (totalBytes > 0) {
+            (device.totalBytesUp.toFloat() / totalBytes.toFloat() * 100).toInt()
+        } else 0
+    }
+    val timeSince = remember(device.lastSeen) {
+        formatTimeSince(device.lastSeen)
+    }
     
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -184,9 +777,15 @@ private fun DeviceTrafficCard(device: com.example.shieldshare.managers.meter.Cli
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Device header
+            // Device header - clickable to expand with rounded ripple
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(
+                        indication = rememberRipple(bounded = true),
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) { expanded = !expanded },
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -205,145 +804,161 @@ private fun DeviceTrafficCard(device: com.example.shieldshare.managers.meter.Cli
                         fontFamily = FontFamily.Monospace
                     )
                 }
-                Text(
-                    text = formatTimeSince(device.lastSeen),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-            
-            Divider()
-            
-            // Traffic stats
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.Start,
-                    modifier = Modifier.weight(1f)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "↑ Upload",
+                        text = timeSince,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.Medium
                     )
-                    Text(
-                        text = formatBytes(device.totalBytesUp),
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(
-                        text = "Total",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = formatBytes(totalBytes),
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.secondary
-                    )
-                }
-                Column(
-                    horizontalAlignment = Alignment.End,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(
-                        text = "↓ Download",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = formatBytes(device.totalBytesDown),
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.tertiary
+                    Icon(
+                        imageVector = if (expanded) 
+                            Icons.Default.ExpandLess 
+                        else 
+                            Icons.Default.ExpandMore,
+                        contentDescription = if (expanded) "Collapse" else "Expand",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
             
-            // Progress bar showing upload/download ratio
-            if (totalBytes > 0) {
-                LinearProgressIndicator(
-                    progress = uploadPercent / 100f,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(2.dp)),
-                    color = MaterialTheme.colorScheme.primary,
-                    trackColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.3f)
-                )
+            // Expanded content
+            if (expanded) {
+                Divider()
+                
+                // Traffic stats
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.Start,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(
+                            text = "↑ Upload",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = formatBytes(device.totalBytesUp),
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(
+                            text = "Total",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = formatBytes(totalBytes),
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    }
+                    Column(
+                        horizontalAlignment = Alignment.End,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(
+                            text = "↓ Download",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = formatBytes(device.totalBytesDown),
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.tertiary
+                        )
+                    }
+                }
+                
+                // Progress bar showing upload/download ratio
+                if (totalBytes > 0) {
+                    LinearProgressIndicator(
+                        progress = uploadPercent / 100f,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(2.dp)),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.3f)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "$uploadPercent% upload",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "${100 - uploadPercent}% download",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                
+                // Speed indicators
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(horizontalAlignment = Alignment.Start) {
+                        Text(
+                            text = "↑ ${formatSpeed(device.currentRateUp)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Medium,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            text = "↓ ${formatSpeed(device.currentRateDown)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.tertiary,
+                            fontWeight = FontWeight.Medium,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+                
+                // Connection info
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = "$uploadPercent% upload",
+                        text = "Connections: ${device.connectionCount}",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Medium
                     )
-                    Text(
-                        text = "${100 - uploadPercent}% download",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            
-            // Speed indicators
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(horizontalAlignment = Alignment.Start) {
-                    Text(
-                        text = "↑ ${formatSpeed(device.currentRateUp)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Medium,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        text = "↓ ${formatSpeed(device.currentRateDown)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.tertiary,
-                        fontWeight = FontWeight.Medium,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
-            }
-            
-            // Connection info
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = "Connections: ${device.connectionCount}",
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Medium
-                )
-                if (device.activeConnections > 0) {
-                    Text(
-                        text = "${device.activeConnections} active",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold
-                    )
+                    if (device.activeConnections > 0) {
+                        Text(
+                            text = "${device.activeConnections} active",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
         }

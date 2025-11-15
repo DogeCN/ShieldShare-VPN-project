@@ -3,6 +3,7 @@ package com.example.shieldshare
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -12,8 +13,10 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.core.view.WindowCompat
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
@@ -59,6 +62,26 @@ fun MainAppContent() {
     }
     
     ShieldShareTheme(themeMode = themeMode) {
+        // Configure status bar appearance based on theme
+        val useDarkTheme = when (themeMode) {
+            ThemeMode.SYSTEM -> isSystemInDarkTheme()
+            ThemeMode.LIGHT -> false
+            ThemeMode.DARK -> true
+        }
+        
+        // Set status bar appearance
+        val view = LocalView.current
+        LaunchedEffect(useDarkTheme) {
+            val activity = view.context as? ComponentActivity
+            activity?.window?.let { window ->
+                WindowCompat.getInsetsController(window, view).apply {
+                    // isAppearanceLightStatusBars = true means dark icons (for light backgrounds)
+                    // isAppearanceLightStatusBars = false means light icons (for dark backgrounds)
+                    isAppearanceLightStatusBars = !useDarkTheme
+                }
+            }
+        }
+        
         Surface(
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background

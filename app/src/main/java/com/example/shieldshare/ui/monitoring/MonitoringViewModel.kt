@@ -1,7 +1,10 @@
 package com.example.shieldshare.ui.monitoring
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.shieldshare.data.repository.TrafficRepository
+import com.example.shieldshare.data.repository.DatabaseStats
 import com.example.shieldshare.managers.meter.TrafficMeter
 import com.example.shieldshare.managers.meter.TrafficMeterSimple
 import com.example.shieldshare.managers.meter.ClientTrafficStats
@@ -13,6 +16,8 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -21,7 +26,8 @@ class MonitoringViewModel @Inject constructor(
     private val vpnManager: VpnManager,
     private val proxyServer: ProxyServer,
     private val trafficMeter: TrafficMeter,
-    private val hotspotManager: HotspotManager
+    private val hotspotManager: HotspotManager,
+    private val trafficRepository: TrafficRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(MonitoringUiState())
@@ -30,7 +36,7 @@ class MonitoringViewModel @Inject constructor(
     // Track previous stats for speed calculation (IP -> previous bytes)
     private val previousStats = mutableMapOf<String, Pair<Long, Long>>() // IP -> (bytesUp, bytesDown)
     private var lastUpdateTime = System.currentTimeMillis()
-    private val UPDATE_INTERVAL_MS = 2000L // 2 seconds
+    private val UPDATE_INTERVAL_MS = 3000L // 3 seconds (reduced frequency for better performance)
 
     init {
         // Observe VPN status changes
@@ -42,6 +48,25 @@ class MonitoringViewModel @Inject constructor(
                 )
             }
         }
+        
+        // Observe service sessions from database
+        // Room Flow automatically emits when data changes, so we can collect directly
+        viewModelScope.launch {
+            trafficRepository.getAllServiceSessions()
+                .collect { serviceSessions ->
+                    _uiState.value = _uiState.value.copy(serviceSessions = serviceSessions)
+                    // Automatically update database stats when service sessions change
+                    loadDatabaseStats()
+                    // Reload unique IP summary when sessions change
+                    loadUniqueIpTrafficSummary()
+                }
+        }
+        
+        // Load initial database statistics
+        loadDatabaseStats()
+        
+        // Load unique IP traffic summary
+        loadUniqueIpTrafficSummary()
 
         // Update proxy status and traffic data periodically
         viewModelScope.launch {
@@ -95,6 +120,7 @@ class MonitoringViewModel @Inject constructor(
                 val totalBytesUp = trafficStats.sumOf { it.totalBytesUp }
                 val totalBytesDown = trafficStats.sumOf { it.totalBytesDown }
                 
+                // Update state - let Compose handle optimization with keys
                 _uiState.value = _uiState.value.copy(
                     isProxyRunning = proxyInfo.isRunning,
                     activeConnections = proxyInfo.activeConnections,
@@ -105,6 +131,55 @@ class MonitoringViewModel @Inject constructor(
                     rawLogs = rawLogs
                 )
                 kotlinx.coroutines.delay(UPDATE_INTERVAL_MS)
+            }
+        }
+    }
+    
+    /**
+     * Load database statistics.
+     */
+    private fun loadDatabaseStats() {
+        viewModelScope.launch {
+            try {
+                val stats = trafficRepository.getDatabaseStats()
+                _uiState.value = _uiState.value.copy(
+                    databaseStats = stats
+                )
+            } catch (e: Exception) {
+                // Error loading stats - keep existing state
+            }
+        }
+    }
+    
+    
+    /**
+     * Load client traffic for a specific service session.
+     */
+    fun loadClientTrafficForSession(sessionId: String) {
+        viewModelScope.launch {
+            try {
+                val clientTraffic = trafficRepository.getClientTrafficForServiceSession(sessionId)
+                _uiState.value = _uiState.value.copy(
+                    clientTrafficPerSession = _uiState.value.clientTrafficPerSession + (sessionId to clientTraffic)
+                )
+            } catch (e: Exception) {
+                Log.e("MonitoringViewModel", "Error loading client traffic for session", e)
+            }
+        }
+    }
+    
+    /**
+     * Load aggregated traffic summary for all unique IPs.
+     */
+    private fun loadUniqueIpTrafficSummary() {
+        viewModelScope.launch {
+            try {
+                val summary = trafficRepository.getAllUniqueIpTrafficSummary()
+                _uiState.value = _uiState.value.copy(
+                    uniqueIpTrafficSummary = summary
+                )
+            } catch (e: Exception) {
+                Log.e("MonitoringViewModel", "Error loading unique IP traffic summary", e)
             }
         }
     }
@@ -119,5 +194,12 @@ data class MonitoringUiState(
     val totalBytesUp: Long = 0,
     val totalBytesDown: Long = 0,
     val activeClients: Int = 0,
-    val rawLogs: List<String> = emptyList()
+    val rawLogs: List<String> = emptyList(),
+    // Persistent data from database
+    val databaseStats: DatabaseStats? = null,
+    val serviceSessions: List<com.example.shieldshare.data.db.ServiceSessionEntity> = emptyList(),
+    // Client traffic per service session (sessionId -> Map<clientIp, Pair<bytesUp, bytesDown>>)
+    val clientTrafficPerSession: Map<String, Map<String, Pair<Long, Long>>> = emptyMap(),
+    // Aggregated traffic summary for all unique IPs (IP -> Pair<bytesUp, bytesDown>)
+    val uniqueIpTrafficSummary: Map<String, Pair<Long, Long>> = emptyMap()
 )
