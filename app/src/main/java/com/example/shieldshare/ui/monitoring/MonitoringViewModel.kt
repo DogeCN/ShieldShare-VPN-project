@@ -39,9 +39,6 @@ class MonitoringViewModel @Inject constructor(
     private val UPDATE_INTERVAL_MS = 3000L // 3 seconds (reduced frequency for better performance)
 
     init {
-        // Load database statistics
-        loadDatabaseStats()
-        
         // Observe VPN status changes
         viewModelScope.launch {
             vpnManager.subscribeToStatusChanges().collect { status ->
@@ -60,8 +57,13 @@ class MonitoringViewModel @Inject constructor(
                 .debounce(500) // Wait 500ms after last emission before processing
                 .collect { serviceSessions ->
                     _uiState.value = _uiState.value.copy(serviceSessions = serviceSessions)
+                    // Automatically update database stats when service sessions change
+                    loadDatabaseStats()
                 }
         }
+        
+        // Load initial database statistics
+        loadDatabaseStats()
 
         // Update proxy status and traffic data periodically
         viewModelScope.launch {
@@ -146,12 +148,6 @@ class MonitoringViewModel @Inject constructor(
         }
     }
     
-    /**
-     * Refresh database statistics.
-     */
-    fun refreshDatabaseStats() {
-        loadDatabaseStats()
-    }
     
     /**
      * Load client traffic for a specific service session.

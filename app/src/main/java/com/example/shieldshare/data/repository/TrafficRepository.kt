@@ -460,6 +460,7 @@ class TrafficRepository @Inject constructor(
     /**
      * End a service session and calculate final statistics.
      * Flushes any pending traffic records first to ensure accuracy.
+     * Also updates database stats automatically.
      */
     suspend fun endServiceSession(sessionId: String) {
         withContext(Dispatchers.IO) {
@@ -499,6 +500,9 @@ class TrafficRepository @Inject constructor(
                     
                     serviceSessionDao.update(updatedSession)
                     Log.d(TAG, "Ended service session: $sessionId - ${uniqueClientIps.size} clients, ↑${totalBytesUp}B ↓${totalBytesDown}B")
+                    
+                    // Database stats are automatically updated via Flow observation in ViewModel
+                    // No need to manually refresh - the Flow will emit the updated service sessions list
                 } else {
                     Log.w(TAG, "Service session not found or already ended: $sessionId")
                 }
@@ -568,16 +572,19 @@ class TrafficRepository @Inject constructor(
 
     /**
      * Get database statistics.
+     * Only counts completed (non-active) service sessions for persistent data display.
      */
     suspend fun getDatabaseStats(): DatabaseStats {
         return withContext(Dispatchers.IO) {
             try {
-                val serviceSessionCount = serviceSessionDao.getSessionCount().toLong()
+                // Get all sessions and filter to only count completed ones
+                val allSessions = serviceSessionDao.getAllSessions().first()
+                val completedSessionCount = allSessions.count { !it.isActive }.toLong()
                 val clientCount = clientStatsDao.getClientCount()
 
                 DatabaseStats(
                     totalRecords = 0L, // Removed - not showing total records
-                    totalSessions = serviceSessionCount, // Now shows service sessions
+                    totalSessions = completedSessionCount, // Only completed service sessions
                     uniqueClients = clientCount
                 )
             } catch (e: Exception) {

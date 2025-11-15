@@ -206,6 +206,7 @@ object AppModule {
         TrafficRepository(
             trafficRecordDao = db.trafficRecordDao(),
             clientSessionDao = db.clientSessionDao(),
-            clientStatsDao = db.clientStatsDao()
+            clientStatsDao = db.clientStatsDao(),
+            serviceSessionDao = db.serviceSessionDao()
         )
 }

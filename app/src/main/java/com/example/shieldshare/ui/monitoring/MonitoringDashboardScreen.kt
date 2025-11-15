@@ -1,6 +1,7 @@
 package com.example.shieldshare.ui.monitoring
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -8,6 +9,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -147,25 +150,11 @@ fun MonitoringDashboardScreen(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Persistent Data",
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        IconButton(
-                            onClick = { viewModel.refreshDatabaseStats() }
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Refresh,
-                                contentDescription = "Refresh"
-                            )
-                        }
-                    }
+                    Text(
+                        text = "Persistent Data",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
 
                     // Database Statistics
                     uiState.databaseStats?.let { stats ->
@@ -184,20 +173,7 @@ fun MonitoringDashboardScreen(
                             ) {
                                 Column {
                                     Text(
-                                        text = "Total Records",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Text(
-                                        text = "${stats.totalRecords}",
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                }
-                                Column {
-                                    Text(
-                                        text = "Sessions",
+                                        text = "Service Sessions",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -226,10 +202,14 @@ fun MonitoringDashboardScreen(
                         Divider()
                     }
 
-                    // Persistent Client Stats
-                    if (uiState.persistentClientStats.isEmpty()) {
+                    // Service Sessions (only show completed sessions, not active ones)
+                    val completedSessions = remember(uiState.serviceSessions) {
+                        uiState.serviceSessions.filter { !it.isActive }
+                    }
+                    
+                    if (completedSessions.isEmpty()) {
                         Text(
-                            text = "No persistent data yet. Historical data will appear here once traffic is recorded.",
+                            text = "No completed service sessions yet. Completed sessions will appear here after they end.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center,
@@ -237,26 +217,24 @@ fun MonitoringDashboardScreen(
                         )
                     } else {
                         Text(
-                            text = "All-Time Client Statistics",
+                            text = "Service Sessions",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Medium
                         )
-                        // Sort persistent stats - use remember to avoid recomputing
-                        val sortedPersistentStats = remember(uiState.persistentClientStats) {
-                            uiState.persistentClientStats.sortedByDescending { 
-                                it.totalBytesUploaded + it.totalBytesDownloaded 
-                            }
-                        }
                         
                         LazyColumn(
-                            modifier = Modifier.heightIn(max = 300.dp),
+                            modifier = Modifier.heightIn(max = 500.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             items(
-                                items = sortedPersistentStats,
-                                key = { it.clientIp } // Use client IP as key for stable identity
-                            ) { persistentStat ->
-                                PersistentClientCard(persistentStat = persistentStat)
+                                items = completedSessions,
+                                key = { it.sessionId } // Use session ID as key for stable identity
+                            ) { session ->
+                                ServiceSessionCard(
+                                    session = session,
+                                    clientTraffic = uiState.clientTrafficPerSession[session.sessionId],
+                                    onExpand = { viewModel.loadClientTrafficForSession(session.sessionId) }
+                                )
                             }
                         }
                     }
@@ -267,13 +245,30 @@ fun MonitoringDashboardScreen(
 }
 
 @Composable
-private fun PersistentClientCard(persistentStat: com.example.shieldshare.data.db.ClientStatsEntity) {
-    // Use remember to avoid recalculating on every recomposition
-    val totalBytes = remember(persistentStat.totalBytesUploaded, persistentStat.totalBytesDownloaded) {
-        persistentStat.totalBytesUploaded + persistentStat.totalBytesDownloaded
+private fun ServiceSessionCard(
+    session: com.example.shieldshare.data.db.ServiceSessionEntity,
+    clientTraffic: Map<String, Pair<Long, Long>>?,
+    onExpand: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    
+    // Calculate uptime
+    val uptime = remember(session.startTime, session.endTime) {
+        val endTime = session.endTime ?: System.currentTimeMillis()
+        endTime - session.startTime
     }
-    val timeSince = remember(persistentStat.lastSeen) {
-        formatTimeSince(persistentStat.lastSeen)
+    
+    // Format dates
+    val startTimeFormatted = remember(session.startTime) {
+        formatDateTime(session.startTime)
+    }
+    val endTimeFormatted = remember(session.endTime) {
+        session.endTime?.let { formatDateTime(it) } ?: "Active"
+    }
+    
+    // Total bytes
+    val totalBytes = remember(session.totalBytesUploaded, session.totalBytesDownloaded) {
+        session.totalBytesUploaded + session.totalBytesDownloaded
     }
     
     Card(
@@ -288,33 +283,44 @@ private fun PersistentClientCard(persistentStat: com.example.shieldshare.data.db
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // Header - clickable to expand
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { 
+                        expanded = !expanded
+                        if (expanded && clientTraffic == null) {
+                            onExpand()
+                        }
+                    },
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = persistentStat.clientIp,
-                        style = MaterialTheme.typography.titleSmall,
+                        text = "Service Session",
+                        style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.primary
                     )
                     Text(
-                        text = persistentStat.macAddress,
+                        text = formatUptime(uptime),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontFamily = FontFamily.Monospace
                     )
                 }
-                Text(
-                    text = timeSince,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                Icon(
+                    imageVector = if (expanded) 
+                        Icons.Default.ExpandLess 
+                    else 
+                        Icons.Default.ExpandMore,
+                    contentDescription = if (expanded) "Collapse" else "Expand",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             
+            // Summary stats (always visible)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -326,7 +332,7 @@ private fun PersistentClientCard(persistentStat: com.example.shieldshare.data.db
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = formatBytes(persistentStat.totalBytesUploaded),
+                        text = formatBytes(session.totalBytesUploaded),
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace
@@ -352,7 +358,7 @@ private fun PersistentClientCard(persistentStat: com.example.shieldshare.data.db
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = formatBytes(persistentStat.totalBytesDownloaded),
+                        text = formatBytes(session.totalBytesDownloaded),
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace
@@ -360,22 +366,127 @@ private fun PersistentClientCard(persistentStat: com.example.shieldshare.data.db
                 }
             }
             
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = "Connections: ${persistentStat.totalConnections}",
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace
-                )
-                Text(
-                    text = "Sessions: ${persistentStat.totalSessions}",
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace
-                )
+            // Expanded content
+            if (expanded) {
+                Divider()
+                
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Session details
+                    Text(
+                        text = "Session Details",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Medium
+                    )
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column {
+                            Text(
+                                text = "Started",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = startTimeFormatted,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "Ended",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = endTimeFormatted,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                    
+                    Text(
+                        text = "Clients: ${session.uniqueClients}",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    
+                    // Client traffic breakdown
+                    if (clientTraffic != null && clientTraffic.isNotEmpty()) {
+                        Divider()
+                        Text(
+                            text = "Client Traffic",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Medium
+                        )
+                        
+                        val sortedClients = clientTraffic.toList().sortedByDescending { 
+                            it.second.first + it.second.second 
+                        }
+                        
+                        sortedClients.forEach { (clientIp, traffic) ->
+                            ClientTrafficRow(
+                                clientIp = clientIp,
+                                bytesUp = traffic.first,
+                                bytesDown = traffic.second
+                            )
+                        }
+                    } else if (expanded) {
+                        // Loading indicator or placeholder
+                        Text(
+                            text = "Loading client traffic...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                    }
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun ClientTrafficRow(
+    clientIp: String,
+    bytesUp: Long,
+    bytesDown: Long
+) {
+    val totalBytes = bytesUp + bytesDown
+    
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = clientIp,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                text = "↑${formatBytes(bytesUp)} ↓${formatBytes(bytesDown)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontFamily = FontFamily.Monospace
+            )
+        }
+        Text(
+            text = formatBytes(totalBytes),
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace
+        )
     }
 }
 
@@ -412,6 +523,26 @@ private fun formatTimeSince(timestamp: Long): String {
         hours < 24 -> "${hours}h ago"
         else -> "${hours / 24}d ago"
     }
+}
+
+// Helper function to format uptime (duration in milliseconds)
+private fun formatUptime(millis: Long): String {
+    val totalSeconds = millis / 1000
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    
+    return when {
+        hours > 0 -> "${hours}h ${minutes}m ${seconds}s"
+        minutes > 0 -> "${minutes}m ${seconds}s"
+        else -> "${seconds}s"
+    }
+}
+
+// Helper function to format date and time
+private fun formatDateTime(timestamp: Long): String {
+    val dateFormat = java.text.SimpleDateFormat("MMM dd, yyyy HH:mm:ss", java.util.Locale.getDefault())
+    return dateFormat.format(java.util.Date(timestamp))
 }
 
 @Composable
