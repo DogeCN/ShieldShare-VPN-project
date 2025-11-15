@@ -38,7 +38,8 @@ constructor(
         private val proxyServer: ProxyServer,
         private val hotspotManager: HotspotManager,
         private val appPrefs: AppPrefs,
-        private val ipProvider: IpAddressProvider
+        private val ipProvider: IpAddressProvider,
+        private val trafficMeter: com.example.shieldshare.managers.meter.TrafficMeter
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HomeUiState())
@@ -159,6 +160,12 @@ constructor(
                                     hotspotIp?.let {
                                         "http://$it:${ProxyPortManager.CONFIG_PORT}/proxy.pac"
                                     }
+                            // Initialize speed tracking when proxy starts
+                            val initialStats = trafficMeter.getCurrentStats()
+                            previousTotalBytesUp = initialStats.sumOf { it.totalBytesUp }
+                            previousTotalBytesDown = initialStats.sumOf { it.totalBytesDown }
+                            lastStatsUpdateTime = System.currentTimeMillis()
+                            
                             _uiState.value =
                                     _uiState.value.copy(
                                             isProxyRunning = true,
@@ -168,9 +175,9 @@ constructor(
                                             proxyType = proxyType,
                                             configPortalPort = ProxyPortManager.CONFIG_PORT,
                                             pacUrl = pacUrl,
-                                            uploadSpeed = "0 KB/s",
-                                            downloadSpeed = "0 KB/s",
-                                            latency = "0ms"
+                                            uploadSpeed = "0 B/s", // Will update immediately via startStatsUpdates
+                                            downloadSpeed = "0 B/s", // Will update immediately via startStatsUpdates
+                                            latency = "—" // Not available from traffic meter
                                     )
 
                             // Start real-time stats updates
@@ -193,10 +200,18 @@ constructor(
                 result.fold(
                         onSuccess = {
                             Log.i("HomeViewModel", "Proxy server stopped")
+                            // Reset speed tracking
+                            previousTotalBytesUp = 0
+                            previousTotalBytesDown = 0
+                            lastStatsUpdateTime = System.currentTimeMillis()
+                            
                             _uiState.value =
                                     _uiState.value.copy(
                                             isProxyRunning = false,
-                                            pacUrl = null
+                                            pacUrl = null,
+                                            uploadSpeed = "0 B/s",
+                                            downloadSpeed = "0 B/s",
+                                            latency = "—"
                                     )
                         },
                         onFailure = { error ->
@@ -217,25 +232,77 @@ constructor(
         return hotspotManager.getHotspotIpAddress() ?: "Not available"
     }
 
+    // Track previous traffic totals for speed calculation
+    private var previousTotalBytesUp: Long = 0
+    private var previousTotalBytesDown: Long = 0
+    private var lastStatsUpdateTime: Long = System.currentTimeMillis()
+
     fun startStatsUpdates() {
         viewModelScope.launch {
             while (isActive) {
                 if (_uiState.value.isProxyRunning) {
-                    // Simulate real-time stats updates
-                    val uploadSpeed = "${(10..500).random()} KB/s"
-                    val downloadSpeed = "${(50..1000).random()} KB/s"
-                    val latency = "${(20..100).random()}ms"
-
-                    _uiState.update {
-                        it.copy(
-                                uploadSpeed = uploadSpeed,
-                                downloadSpeed = downloadSpeed,
-                                latency = latency
-                        )
+                    try {
+                        // Get real traffic data from TrafficMeter
+                        val currentStats = trafficMeter.getCurrentStats()
+                        
+                        // Calculate total traffic across all clients
+                        val currentTotalBytesUp = currentStats.sumOf { it.totalBytesUp }
+                        val currentTotalBytesDown = currentStats.sumOf { it.totalBytesDown }
+                        
+                        // Calculate time delta
+                        val currentTime = System.currentTimeMillis()
+                        val timeDelta = (currentTime - lastStatsUpdateTime).coerceAtLeast(100) // At least 100ms
+                        
+                        // Calculate speeds (bytes per second)
+                        val bytesUpDiff = currentTotalBytesUp - previousTotalBytesUp
+                        val bytesDownDiff = currentTotalBytesDown - previousTotalBytesDown
+                        
+                        val uploadSpeedBps = (bytesUpDiff * 1000.0) / timeDelta
+                        val downloadSpeedBps = (bytesDownDiff * 1000.0) / timeDelta
+                        
+                        // Format speeds
+                        val uploadSpeed = formatSpeed(uploadSpeedBps)
+                        val downloadSpeed = formatSpeed(downloadSpeedBps)
+                        
+                        // Latency is not directly available from traffic meter
+                        // For now, we'll show a placeholder or calculate from connection times
+                        val latency = "—" // Placeholder - could be enhanced later
+                        
+                        _uiState.update {
+                            it.copy(
+                                    uploadSpeed = uploadSpeed,
+                                    downloadSpeed = downloadSpeed,
+                                    latency = latency
+                            )
+                        }
+                        
+                        // Update previous values for next calculation
+                        previousTotalBytesUp = currentTotalBytesUp
+                        previousTotalBytesDown = currentTotalBytesDown
+                        lastStatsUpdateTime = currentTime
+                    } catch (e: Exception) {
+                        Log.e("HomeViewModel", "Error updating stats", e)
                     }
+                } else {
+                    // Reset when proxy stops
+                    previousTotalBytesUp = 0
+                    previousTotalBytesDown = 0
+                    lastStatsUpdateTime = System.currentTimeMillis()
                 }
                 delay(2000) // Update every 2 seconds
             }
+        }
+    }
+    
+    /**
+     * Format bytes per second to human-readable speed string.
+     */
+    private fun formatSpeed(bytesPerSecond: Double): String {
+        return when {
+            bytesPerSecond < 1024 -> "%.0f B/s".format(bytesPerSecond)
+            bytesPerSecond < 1024 * 1024 -> "%.1f KB/s".format(bytesPerSecond / 1024.0)
+            bytesPerSecond < 1024 * 1024 * 1024 -> "%.1f MB/s".format(bytesPerSecond / (1024.0 * 1024.0))
+            else -> "%.2f GB/s".format(bytesPerSecond / (1024.0 * 1024.0 * 1024.0))
         }
     }
 
