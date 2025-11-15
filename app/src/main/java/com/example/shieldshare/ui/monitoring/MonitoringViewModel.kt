@@ -57,11 +57,16 @@ class MonitoringViewModel @Inject constructor(
                     _uiState.value = _uiState.value.copy(serviceSessions = serviceSessions)
                     // Automatically update database stats when service sessions change
                     loadDatabaseStats()
+                    // Reload unique IP summary when sessions change
+                    loadUniqueIpTrafficSummary()
                 }
         }
         
         // Load initial database statistics
         loadDatabaseStats()
+        
+        // Load unique IP traffic summary
+        loadUniqueIpTrafficSummary()
 
         // Update proxy status and traffic data periodically
         viewModelScope.launch {
@@ -162,6 +167,22 @@ class MonitoringViewModel @Inject constructor(
             }
         }
     }
+    
+    /**
+     * Load aggregated traffic summary for all unique IPs.
+     */
+    private fun loadUniqueIpTrafficSummary() {
+        viewModelScope.launch {
+            try {
+                val summary = trafficRepository.getAllUniqueIpTrafficSummary()
+                _uiState.value = _uiState.value.copy(
+                    uniqueIpTrafficSummary = summary
+                )
+            } catch (e: Exception) {
+                Log.e("MonitoringViewModel", "Error loading unique IP traffic summary", e)
+            }
+        }
+    }
 }
 
 data class MonitoringUiState(
@@ -178,5 +199,7 @@ data class MonitoringUiState(
     val databaseStats: DatabaseStats? = null,
     val serviceSessions: List<com.example.shieldshare.data.db.ServiceSessionEntity> = emptyList(),
     // Client traffic per service session (sessionId -> Map<clientIp, Pair<bytesUp, bytesDown>>)
-    val clientTrafficPerSession: Map<String, Map<String, Pair<Long, Long>>> = emptyMap()
+    val clientTrafficPerSession: Map<String, Map<String, Pair<Long, Long>>> = emptyMap(),
+    // Aggregated traffic summary for all unique IPs (IP -> Pair<bytesUp, bytesDown>)
+    val uniqueIpTrafficSummary: Map<String, Pair<Long, Long>> = emptyMap()
 )

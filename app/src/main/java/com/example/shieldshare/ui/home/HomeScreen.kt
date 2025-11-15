@@ -355,7 +355,7 @@ fun StatusCard(
                                 // Connections
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                         Text(
-                                                text = "Connections",
+                                                text = "Clients",
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )

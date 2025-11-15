@@ -683,6 +683,39 @@ class TrafficRepository @Inject constructor(
             }
         }
     }
+    
+    /**
+     * Get aggregated traffic data for all unique IPs across all time.
+     * Returns a map of client IP to their total upload and download bytes.
+     */
+    suspend fun getAllUniqueIpTrafficSummary(): Map<String, Pair<Long, Long>> {
+        return withContext(Dispatchers.IO) {
+            try {
+                // Get all traffic records (with a reasonable limit to avoid memory issues)
+                // We'll aggregate by client IP
+                val allRecords = trafficRecordDao.getTrafficInRange(
+                    startTime = 0L,
+                    endTime = Long.MAX_VALUE,
+                    limit = 50000 // Large limit to get all records
+                ).first()
+                
+                // Aggregate by client IP
+                val clientTraffic = mutableMapOf<String, Pair<Long, Long>>()
+                allRecords.forEach { record ->
+                    val current = clientTraffic.getOrDefault(record.clientIp, Pair(0L, 0L))
+                    clientTraffic[record.clientIp] = Pair(
+                        current.first + record.bytesUploaded,
+                        current.second + record.bytesDownloaded
+                    )
+                }
+                
+                clientTraffic
+            } catch (e: Exception) {
+                Log.e(TAG, "Error getting all unique IP traffic summary", e)
+                emptyMap()
+            }
+        }
+    }
 }
 
 /**

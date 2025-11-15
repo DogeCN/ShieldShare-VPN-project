@@ -2,12 +2,14 @@ package com.example.shieldshare.ui.monitoring
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.ripple.rememberRipple
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -20,7 +22,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.hilt.navigation.compose.hiltViewModel
 import java.text.SimpleDateFormat
 import java.time.Instant
@@ -66,13 +71,7 @@ fun MonitoringDashboardScreen(
                     )
                     
                     Text(
-                        text = "Proxy Status: ${if (uiState.isProxyRunning) "Running" else "Stopped"}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    
-                    Text(
-                        text = "Active Connections: ${uiState.activeConnections}",
+                        text = "Proxy Status: ${if (uiState.isProxyRunning) "RUNNING" else "STOPPED"}",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Bold
                     )
@@ -125,14 +124,11 @@ fun MonitoringDashboardScreen(
                             }
                         }
                         
-                        LazyColumn(
-                            modifier = Modifier.heightIn(max = 400.dp),
+                        // Use Column instead of LazyColumn to avoid nested scrolling
+                        Column(
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            items(
-                                items = sortedDevices,
-                                key = { it.ipAddress } // Use IP as key for stable identity
-                            ) { device ->
+                            sortedDevices.forEach { device ->
                                 DeviceTrafficCard(device = device)
                             }
                         }
@@ -143,6 +139,8 @@ fun MonitoringDashboardScreen(
 
         // Persistent Data Section
         item {
+            var expanded by remember { mutableStateOf(false) }
+            
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -153,80 +151,192 @@ fun MonitoringDashboardScreen(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text(
-                        text = "Session Data Summary",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.SemiBold
-                    )
-
-                    // Database Statistics
-                    uiState.databaseStats?.let { stats ->
+                    // Header - clickable to expand/collapse with rounded ripple
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable(
+                                indication = rememberRipple(bounded = true),
+                                interactionSource = remember { MutableInteractionSource() }
+                            ) { expanded = !expanded },
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Historical Session Data",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                        Icon(
+                            imageVector = if (expanded) 
+                                Icons.Default.ExpandLess 
+                            else 
+                                Icons.Default.ExpandMore,
+                            contentDescription = if (expanded) "Collapse" else "Expand",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                    }
+                    
+                    // Simple conditional rendering - no animations to avoid lag
+                    if (expanded) {
                         Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Column {
-                                    Text(
-                                        text = "Service Sessions",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Text(
-                                        text = "${stats.totalSessions}",
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace
-                                    )
+                            // Database Statistics
+                            uiState.databaseStats?.let { stats ->
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Column {
+                                            Text(
+                                                text = "Service Sessions",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Text(
+                                                text = "${stats.totalSessions}",
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                fontWeight = FontWeight.Bold,
+                                                fontFamily = FontFamily.Monospace
+                                            )
+                                        }
+                                        Column {
+                                            Text(
+                                                text = "Unique Clients",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Text(
+                                                text = "${stats.uniqueClients}",
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                fontWeight = FontWeight.Bold,
+                                                fontFamily = FontFamily.Monospace
+                                            )
+                                        }
+                                    }
                                 }
-                                Column {
-                                    Text(
-                                        text = "Unique Clients",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Text(
-                                        text = "${stats.uniqueClients}",
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace
-                                    )
+                                Divider()
+                            }
+
+                            // Service Sessions (only show completed sessions, not active ones)
+                            val completedSessions = remember(uiState.serviceSessions) {
+                                uiState.serviceSessions.filter { !it.isActive }
+                            }
+                            
+                            if (completedSessions.isEmpty()) {
+                                Text(
+                                    text = "No completed service sessions yet. Completed sessions will appear here after they end.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                                )
+                            } else {
+                                // Use LazyColumn for better performance with many sessions
+                                // Use fixed height to avoid measurement overhead during expansion
+                                LazyColumn(
+                                    modifier = Modifier.height(600.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    contentPadding = PaddingValues(vertical = 4.dp)
+                                ) {
+                                    items(
+                                        items = completedSessions,
+                                        key = { it.sessionId }
+                                    ) { session ->
+                                        ServiceSessionCard(
+                                            session = session,
+                                            clientTraffic = uiState.clientTrafficPerSession[session.sessionId],
+                                            onExpand = { viewModel.loadClientTrafficForSession(session.sessionId) }
+                                        )
+                                    }
                                 }
                             }
                         }
-                        Divider()
                     }
-
-                    // Service Sessions (only show completed sessions, not active ones)
-                    val completedSessions = remember(uiState.serviceSessions) {
-                        uiState.serviceSessions.filter { !it.isActive }
+                }
+            }
+        }
+        
+        // Unique IP Traffic Summary Card
+        item {
+            var expanded by remember { mutableStateOf(false) }
+            
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Header - clickable to expand/collapse with rounded ripple
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable(
+                                indication = rememberRipple(bounded = true),
+                                interactionSource = remember { MutableInteractionSource() }
+                            ) { expanded = !expanded },
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Historical Usage by IP",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                        Icon(
+                            imageVector = if (expanded) 
+                                Icons.Default.ExpandLess 
+                            else 
+                                Icons.Default.ExpandMore,
+                            contentDescription = if (expanded) "Collapse" else "Expand",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
                     }
                     
-                    if (completedSessions.isEmpty()) {
-                        Text(
-                            text = "No completed service sessions yet. Completed sessions will appear here after they end.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
-                        )
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier.heightIn(max = 500.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            items(
-                                items = completedSessions,
-                                key = { it.sessionId } // Use session ID as key for stable identity
-                            ) { session ->
-                                ServiceSessionCard(
-                                    session = session,
-                                    clientTraffic = uiState.clientTrafficPerSession[session.sessionId],
-                                    onExpand = { viewModel.loadClientTrafficForSession(session.sessionId) }
-                                )
+                    // Simple conditional rendering - no heavy animations
+                    if (expanded) {
+                        if (uiState.uniqueIpTrafficSummary.isEmpty()) {
+                            Text(
+                                text = "No traffic data available yet.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp)
+                            )
+                        } else {
+                            // Sort by total traffic (descending)
+                            val sortedIps = remember(uiState.uniqueIpTrafficSummary) {
+                                uiState.uniqueIpTrafficSummary.toList().sortedByDescending { 
+                                    it.second.first + it.second.second 
+                                }
+                            }
+                            
+                            // Use Column instead of LazyColumn to avoid nested scrolling
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                sortedIps.forEach { (ip, traffic) ->
+                                    UniqueIpTrafficRow(
+                                        ip = ip,
+                                        bytesUp = traffic.first,
+                                        bytesDown = traffic.second
+                                    )
+                                }
                             }
                         }
                     }
@@ -281,11 +391,15 @@ private fun ServiceSessionCard(
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Header - clickable to expand
+            // Header - clickable to expand with rounded ripple
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { 
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(
+                        indication = rememberRipple(bounded = true),
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) { 
                         expanded = !expanded
                         if (expanded && clientTraffic == null) {
                             onExpand()
@@ -415,27 +529,38 @@ private fun ServiceSessionCard(
                     )
                     
                     // Client traffic breakdown
-                    if (clientTraffic != null && clientTraffic.isNotEmpty()) {
-                        Divider()
-                        Text(
-                            text = "Client Traffic",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Medium
-                        )
-                        
-                        val sortedClients = clientTraffic.toList().sortedByDescending { 
-                            it.second.first + it.second.second 
-                        }
-                        
-                        sortedClients.forEach { (clientIp, traffic) ->
-                            ClientTrafficRow(
-                                clientIp = clientIp,
-                                bytesUp = traffic.first,
-                                bytesDown = traffic.second
+                    if (clientTraffic != null) {
+                        if (clientTraffic.isNotEmpty()) {
+                            Divider()
+                            Text(
+                                text = "Client Traffic",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Medium
+                            )
+                            
+                            val sortedClients = clientTraffic.toList().sortedByDescending { 
+                                it.second.first + it.second.second 
+                            }
+                            
+                            sortedClients.forEach { (clientIp, traffic) ->
+                                ClientTrafficRow(
+                                    clientIp = clientIp,
+                                    bytesUp = traffic.first,
+                                    bytesDown = traffic.second
+                                )
+                            }
+                        } else {
+                            // Empty client traffic (no clients or all zeros)
+                            Divider()
+                            Text(
+                                text = "No client traffic data for this session.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(vertical = 4.dp)
                             )
                         }
                     } else if (expanded) {
-                        // Loading indicator or placeholder
+                        // Loading indicator - only show if we're actually loading
                         Text(
                             text = "Loading client traffic...",
                             style = MaterialTheme.typography.bodySmall,
@@ -485,6 +610,60 @@ private fun ClientTrafficRow(
             fontWeight = FontWeight.Bold,
             fontFamily = FontFamily.Monospace
         )
+    }
+}
+
+@Composable
+private fun UniqueIpTrafficRow(
+    ip: String,
+    bytesUp: Long,
+    bytesDown: Long
+) {
+    val totalBytes = bytesUp + bytesDown
+    
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // IP address - use smaller font and allow natural width
+        Text(
+            text = ip,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            fontFamily = FontFamily.Monospace,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        // Traffic stats - use smaller spacing and compact layout
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "↑${formatBytes(bytesUp)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                fontFamily = FontFamily.Monospace
+            )
+            Text(
+                text = formatBytes(totalBytes),
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace
+            )
+            Text(
+                text = "↓${formatBytes(bytesDown)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.tertiary,
+                fontFamily = FontFamily.Monospace
+            )
+        }
     }
 }
 
@@ -572,11 +751,15 @@ private fun DeviceTrafficCard(device: com.example.shieldshare.managers.meter.Cli
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Device header - clickable to expand
+            // Device header - clickable to expand with rounded ripple
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { expanded = !expanded },
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(
+                        indication = rememberRipple(bounded = true),
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) { expanded = !expanded },
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
