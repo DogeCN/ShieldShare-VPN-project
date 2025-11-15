@@ -112,16 +112,21 @@ fun MonitoringDashboardScreen(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp)
                         )
                     } else {
-                        // Sort devices by total traffic (descending)
-                        val sortedDevices = uiState.trafficStats.sortedByDescending { 
-                            it.totalBytesUp + it.totalBytesDown 
+                        // Sort devices by total traffic (descending) - use remember to avoid recomputing
+                        val sortedDevices = remember(uiState.trafficStats) {
+                            uiState.trafficStats.sortedByDescending { 
+                                it.totalBytesUp + it.totalBytesDown 
+                            }
                         }
                         
                         LazyColumn(
                             modifier = Modifier.heightIn(max = 400.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            items(sortedDevices) { device ->
+                            items(
+                                items = sortedDevices,
+                                key = { it.ipAddress } // Use IP as key for stable identity
+                            ) { device ->
                                 DeviceTrafficCard(device = device)
                             }
                         }
@@ -236,13 +241,21 @@ fun MonitoringDashboardScreen(
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Medium
                         )
+                        // Sort persistent stats - use remember to avoid recomputing
+                        val sortedPersistentStats = remember(uiState.persistentClientStats) {
+                            uiState.persistentClientStats.sortedByDescending { 
+                                it.totalBytesUploaded + it.totalBytesDownloaded 
+                            }
+                        }
+                        
                         LazyColumn(
                             modifier = Modifier.heightIn(max = 300.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            items(uiState.persistentClientStats.sortedByDescending { 
-                                it.totalBytesUploaded + it.totalBytesDownloaded 
-                            }) { persistentStat ->
+                            items(
+                                items = sortedPersistentStats,
+                                key = { it.clientIp } // Use client IP as key for stable identity
+                            ) { persistentStat ->
                                 PersistentClientCard(persistentStat = persistentStat)
                             }
                         }
@@ -255,7 +268,13 @@ fun MonitoringDashboardScreen(
 
 @Composable
 private fun PersistentClientCard(persistentStat: com.example.shieldshare.data.db.ClientStatsEntity) {
-    val totalBytes = persistentStat.totalBytesUploaded + persistentStat.totalBytesDownloaded
+    // Use remember to avoid recalculating on every recomposition
+    val totalBytes = remember(persistentStat.totalBytesUploaded, persistentStat.totalBytesDownloaded) {
+        persistentStat.totalBytesUploaded + persistentStat.totalBytesDownloaded
+    }
+    val timeSince = remember(persistentStat.lastSeen) {
+        formatTimeSince(persistentStat.lastSeen)
+    }
     
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -290,7 +309,7 @@ private fun PersistentClientCard(persistentStat: com.example.shieldshare.data.db
                     )
                 }
                 Text(
-                    text = formatTimeSince(persistentStat.lastSeen),
+                    text = timeSince,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -397,10 +416,18 @@ private fun formatTimeSince(timestamp: Long): String {
 
 @Composable
 private fun DeviceTrafficCard(device: com.example.shieldshare.managers.meter.ClientTrafficStats) {
-    val totalBytes = device.totalBytesUp + device.totalBytesDown
-    val uploadPercent = if (totalBytes > 0) {
-        (device.totalBytesUp.toFloat() / totalBytes.toFloat() * 100).toInt()
-    } else 0
+    // Use remember to avoid recalculating on every recomposition
+    val totalBytes = remember(device.totalBytesUp, device.totalBytesDown) {
+        device.totalBytesUp + device.totalBytesDown
+    }
+    val uploadPercent = remember(device.totalBytesUp, totalBytes) {
+        if (totalBytes > 0) {
+            (device.totalBytesUp.toFloat() / totalBytes.toFloat() * 100).toInt()
+        } else 0
+    }
+    val timeSince = remember(device.lastSeen) {
+        formatTimeSince(device.lastSeen)
+    }
     
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -436,7 +463,7 @@ private fun DeviceTrafficCard(device: com.example.shieldshare.managers.meter.Cli
                     )
                 }
                 Text(
-                    text = formatTimeSince(device.lastSeen),
+                    text = timeSince,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontWeight = FontWeight.Medium

@@ -15,6 +15,8 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -33,7 +35,7 @@ class MonitoringViewModel @Inject constructor(
     // Track previous stats for speed calculation (IP -> previous bytes)
     private val previousStats = mutableMapOf<String, Pair<Long, Long>>() // IP -> (bytesUp, bytesDown)
     private var lastUpdateTime = System.currentTimeMillis()
-    private val UPDATE_INTERVAL_MS = 2000L // 2 seconds
+    private val UPDATE_INTERVAL_MS = 3000L // 3 seconds (reduced frequency for better performance)
 
     init {
         // Load database statistics
@@ -50,12 +52,14 @@ class MonitoringViewModel @Inject constructor(
         }
         
         // Observe persistent client stats from database
+        // Use debounce and distinctUntilChanged to prevent excessive updates
         viewModelScope.launch {
-            trafficRepository.getAllClientStats().collect { persistentStats ->
-                _uiState.value = _uiState.value.copy(
-                    persistentClientStats = persistentStats
-                )
-            }
+            trafficRepository.getAllClientStats()
+                .distinctUntilChanged() // Only emit when data actually changes
+                .debounce(500) // Wait 500ms after last emission before processing
+                .collect { persistentStats ->
+                    _uiState.value = _uiState.value.copy(persistentClientStats = persistentStats)
+                }
         }
 
         // Update proxy status and traffic data periodically
@@ -110,6 +114,7 @@ class MonitoringViewModel @Inject constructor(
                 val totalBytesUp = trafficStats.sumOf { it.totalBytesUp }
                 val totalBytesDown = trafficStats.sumOf { it.totalBytesDown }
                 
+                // Update state - let Compose handle optimization with keys
                 _uiState.value = _uiState.value.copy(
                     isProxyRunning = proxyInfo.isRunning,
                     activeConnections = proxyInfo.activeConnections,
