@@ -2,6 +2,8 @@ package com.example.shieldshare.ui.monitoring
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.shieldshare.data.repository.TrafficRepository
+import com.example.shieldshare.data.repository.DatabaseStats
 import com.example.shieldshare.managers.meter.TrafficMeter
 import com.example.shieldshare.managers.meter.TrafficMeterSimple
 import com.example.shieldshare.managers.meter.ClientTrafficStats
@@ -21,7 +23,8 @@ class MonitoringViewModel @Inject constructor(
     private val vpnManager: VpnManager,
     private val proxyServer: ProxyServer,
     private val trafficMeter: TrafficMeter,
-    private val hotspotManager: HotspotManager
+    private val hotspotManager: HotspotManager,
+    private val trafficRepository: TrafficRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(MonitoringUiState())
@@ -33,12 +36,24 @@ class MonitoringViewModel @Inject constructor(
     private val UPDATE_INTERVAL_MS = 2000L // 2 seconds
 
     init {
+        // Load database statistics
+        loadDatabaseStats()
+        
         // Observe VPN status changes
         viewModelScope.launch {
             vpnManager.subscribeToStatusChanges().collect { status ->
                 _uiState.value = _uiState.value.copy(
                     vpnStatus = status.name,
                     isVpnConnected = status == VpnStatus.CONNECTED
+                )
+            }
+        }
+        
+        // Observe persistent client stats from database
+        viewModelScope.launch {
+            trafficRepository.getAllClientStats().collect { persistentStats ->
+                _uiState.value = _uiState.value.copy(
+                    persistentClientStats = persistentStats
                 )
             }
         }
@@ -108,6 +123,29 @@ class MonitoringViewModel @Inject constructor(
             }
         }
     }
+    
+    /**
+     * Load database statistics.
+     */
+    private fun loadDatabaseStats() {
+        viewModelScope.launch {
+            try {
+                val stats = trafficRepository.getDatabaseStats()
+                _uiState.value = _uiState.value.copy(
+                    databaseStats = stats
+                )
+            } catch (e: Exception) {
+                // Error loading stats - keep existing state
+            }
+        }
+    }
+    
+    /**
+     * Refresh database statistics.
+     */
+    fun refreshDatabaseStats() {
+        loadDatabaseStats()
+    }
 }
 
 data class MonitoringUiState(
@@ -119,5 +157,8 @@ data class MonitoringUiState(
     val totalBytesUp: Long = 0,
     val totalBytesDown: Long = 0,
     val activeClients: Int = 0,
-    val rawLogs: List<String> = emptyList()
+    val rawLogs: List<String> = emptyList(),
+    // Persistent data from database
+    val databaseStats: DatabaseStats? = null,
+    val persistentClientStats: List<com.example.shieldshare.data.db.ClientStatsEntity> = emptyList()
 )
