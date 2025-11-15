@@ -6,6 +6,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.shieldshare.data.db.AppDatabase
 import com.example.shieldshare.data.prefs.AppPrefs
+import com.example.shieldshare.data.repository.TrafficRepository
 import com.example.shieldshare.managers.hotspot.HotspotManager
 import com.example.shieldshare.managers.hotspot.HotspotManagerImpl
 import com.example.shieldshare.managers.meter.TrafficMeter
@@ -165,4 +166,13 @@ object AppModule {
     @Provides @Singleton
     fun provideIpAddressProvider(client: OkHttpClient): IpAddressProvider =
         IpAddressProviderImpl(client)
+
+    @Provides
+    @Singleton
+    fun provideTrafficRepository(db: AppDatabase): TrafficRepository =
+        TrafficRepository(
+            trafficRecordDao = db.trafficRecordDao(),
+            clientSessionDao = db.clientSessionDao(),
+            clientStatsDao = db.clientStatsDao()
+        )
 }
