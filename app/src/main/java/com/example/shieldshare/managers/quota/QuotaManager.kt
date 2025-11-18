@@ -5,6 +5,7 @@ import android.util.Log
 import com.example.shieldshare.data.prefs.AppPrefs
 import com.example.shieldshare.managers.meter.TrafficMeter
 import kotlinx.coroutines.*
+import kotlin.math.max
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -126,7 +127,7 @@ class QuotaManager @Inject constructor(
         connectedClients.forEach { clientIp ->
             val existingState = quotaStates[clientIp]
             val macAddress = existingState?.macAddress ?: "unknown"
-            val actualUsage = getActualUsageFromTrafficMeter(clientIp).coerceAtMost(quotaPerClient)
+            val actualUsage = getActualUsageFromTrafficMeter(clientIp)
             
             // If quota allocation changed significantly (more than 10% difference), reset usage for fairness
             val shouldResetUsage = existingState?.let { 
@@ -135,9 +136,15 @@ class QuotaManager @Inject constructor(
                 quotaChange > 0.1 // More than 10% change
             } ?: true // New client, always reset
             
+            val baseline = existingState?.usageBaselineBytes ?: actualUsage
+            val adjustedUsage = existingState?.let { calculateAdjustedUsage(it, actualUsage) } ?: 0L
+            val newBaseline = if (shouldResetUsage) actualUsage else baseline
+            val newUsed = if (shouldResetUsage) 0 else adjustedUsage.coerceAtMost(quotaPerClient)
+            
             quotaStates[clientIp] = existingState?.copy(
                 allocatedQuotaBytes = quotaPerClient,
-                usedBytes = if (shouldResetUsage) actualUsage else actualUsage, // Always sync with TrafficMeter
+                usedBytes = newUsed,
+                usageBaselineBytes = newBaseline,
                 quotaExceededAt = if (shouldResetUsage) null else existingState.quotaExceededAt,
                 isBlocked = if (shouldResetUsage) false else existingState.isBlocked,
                 blockedUntil = if (shouldResetUsage) null else existingState.blockedUntil,
@@ -146,7 +153,8 @@ class QuotaManager @Inject constructor(
                 clientIp = clientIp,
                 macAddress = macAddress,
                 allocatedQuotaBytes = quotaPerClient,
-                usedBytes = actualUsage,
+                usedBytes = 0,
+                usageBaselineBytes = actualUsage,
                 resetAt = System.currentTimeMillis()
             )
         }
@@ -154,16 +162,21 @@ class QuotaManager @Inject constructor(
         // Handle host quota if specified
         hostIp?.let { ip ->
             val existingState = quotaStates[ip]
-            val actualUsage = getActualUsageFromTrafficMeter(ip).coerceAtMost(quotaPerClient)
+            val actualUsage = getActualUsageFromTrafficMeter(ip)
             val shouldResetUsage = existingState?.let { 
                 val oldQuota = it.allocatedQuotaBytes
                 val quotaChange = kotlin.math.abs(quotaPerClient - oldQuota).toDouble() / oldQuota.coerceAtLeast(1)
                 quotaChange > 0.1
             } ?: true
+            val baseline = existingState?.usageBaselineBytes ?: actualUsage
+            val adjustedUsage = existingState?.let { calculateAdjustedUsage(it, actualUsage) } ?: 0L
+            val newBaseline = if (shouldResetUsage) actualUsage else baseline
+            val newUsed = if (shouldResetUsage) 0 else adjustedUsage.coerceAtMost(quotaPerClient)
             
             quotaStates[ip] = existingState?.copy(
                 allocatedQuotaBytes = quotaPerClient,
-                usedBytes = actualUsage,
+                usedBytes = newUsed,
+                usageBaselineBytes = newBaseline,
                 quotaExceededAt = if (shouldResetUsage) null else existingState.quotaExceededAt,
                 isBlocked = if (shouldResetUsage) false else existingState.isBlocked,
                 blockedUntil = if (shouldResetUsage) null else existingState.blockedUntil,
@@ -172,7 +185,8 @@ class QuotaManager @Inject constructor(
                 clientIp = ip,
                 macAddress = "HOST",
                 allocatedQuotaBytes = quotaPerClient,
-                usedBytes = actualUsage,
+                usedBytes = 0,
+                usageBaselineBytes = actualUsage,
                 resetAt = System.currentTimeMillis()
             )
         }
@@ -226,16 +240,17 @@ class QuotaManager @Inject constructor(
         
         // Get actual usage from TrafficMeter (source of truth - matches Per Device Traffic meter)
         val actualUsedBytes = getActualUsageFromTrafficMeter(clientIp)
+        val adjustedUsedBytes = calculateAdjustedUsage(state, actualUsedBytes)
         
         // Check if quota is exceeded using actual TrafficMeter values
-        val isExceeded = actualUsedBytes >= state.allocatedQuotaBytes && state.allocatedQuotaBytes > 0
+        val isExceeded = adjustedUsedBytes >= state.allocatedQuotaBytes && state.allocatedQuotaBytes > 0
         
         if (isExceeded) {
             // Update quota state to reflect exceeded status
             if (state.quotaExceededAt == null) {
                 // Quota just exceeded - update state and block
                 val updatedState = state.copy(
-                    usedBytes = actualUsedBytes, // Sync with TrafficMeter
+                    usedBytes = adjustedUsedBytes, // delta usage
                     quotaExceededAt = System.currentTimeMillis(),
                     isBlocked = config.blockDurationMs > 0,
                     blockedUntil = if (config.blockDurationMs > 0) {
@@ -246,40 +261,40 @@ class QuotaManager @Inject constructor(
                 recordQuotaExceeded(clientIp)
             } else {
                 // Already exceeded - just sync usage
-                quotaStates[clientIp] = state.copy(usedBytes = actualUsedBytes)
+                quotaStates[clientIp] = state.copy(usedBytes = adjustedUsedBytes)
             }
             
             return QuotaStatus.Exceeded(
-                usedBytes = actualUsedBytes,
+                usedBytes = adjustedUsedBytes,
                 allocatedBytes = state.allocatedQuotaBytes,
                 allowMinimal = config.allowMinimalTraffic
             )
         }
         
         // Check if quota would be exceeded after this transfer
-        if (state.allocatedQuotaBytes > 0 && actualUsedBytes + bytesToTransfer > state.allocatedQuotaBytes) {
+        if (state.allocatedQuotaBytes > 0 && adjustedUsedBytes + bytesToTransfer > state.allocatedQuotaBytes) {
             // Will exceed quota, but allow this transfer and then block
             return QuotaStatus.Exceeded(
-                usedBytes = actualUsedBytes,
+                usedBytes = adjustedUsedBytes,
                 allocatedBytes = state.allocatedQuotaBytes,
                 allowMinimal = config.allowMinimalTraffic
             )
         }
         
         // Sync usage with TrafficMeter for accurate tracking
-        if (actualUsedBytes != state.usedBytes) {
-            quotaStates[clientIp] = state.copy(usedBytes = actualUsedBytes)
+        if (adjustedUsedBytes != state.usedBytes) {
+            quotaStates[clientIp] = state.copy(usedBytes = adjustedUsedBytes)
         }
         
         // Check warning threshold using actual usage
         val usagePercentage = if (state.allocatedQuotaBytes > 0) {
-            actualUsedBytes.toDouble() / state.allocatedQuotaBytes.toDouble()
+            adjustedUsedBytes.toDouble() / state.allocatedQuotaBytes.toDouble()
         } else 0.0
         
         if (usagePercentage >= config.warningThreshold && !isExceeded) {
             return QuotaStatus.Warning(
                 usagePercentage = usagePercentage,
-                remainingBytes = maxOf(0, state.allocatedQuotaBytes - actualUsedBytes)
+                remainingBytes = maxOf(0, state.allocatedQuotaBytes - adjustedUsedBytes)
             )
         }
         
@@ -304,6 +319,10 @@ class QuotaManager @Inject constructor(
             // Fallback to quota state
             quotaStates[clientIp]?.usedBytes ?: 0L
         }
+    }
+    
+    private fun calculateAdjustedUsage(state: QuotaState, actualUsedBytes: Long): Long {
+        return max(0L, actualUsedBytes - state.usageBaselineBytes)
     }
     
     /**
@@ -334,7 +353,8 @@ class QuotaManager @Inject constructor(
                 clientIp = clientIp,
                 macAddress = resolvedMac,
                 allocatedQuotaBytes = config.totalBandwidthBytes.coerceAtLeast(1),
-                usedBytes = initialUsage
+                usedBytes = 0,
+                usageBaselineBytes = initialUsage
             )
             quotaStates[clientIp] = provisionalState
             currentState = provisionalState
@@ -342,6 +362,7 @@ class QuotaManager @Inject constructor(
         
         // Get actual usage from TrafficMeter (source of truth - matches Per Device Traffic meter)
         val actualUsedBytes = getActualUsageFromTrafficMeter(clientIp)
+        val adjustedUsedBytes = calculateAdjustedUsage(currentState, actualUsedBytes)
         
         // Update MAC/ID if provided and current one is "unknown"
         val updatedMacAddress = if (macAddress != null && macAddress != "unknown" && (currentState.macAddress == "unknown" || currentState.macAddress.isEmpty())) {
@@ -351,12 +372,12 @@ class QuotaManager @Inject constructor(
         }
         
         val wasExceeded = currentState.isExceeded
-        val isNowExceeded = actualUsedBytes >= currentState.allocatedQuotaBytes && currentState.allocatedQuotaBytes > 0
+        val isNowExceeded = adjustedUsedBytes >= currentState.allocatedQuotaBytes && currentState.allocatedQuotaBytes > 0
         
         val updatedState = currentState.copy(
             clientIp = clientIp,
             macAddress = updatedMacAddress,
-            usedBytes = actualUsedBytes, // Always sync with TrafficMeter
+            usedBytes = adjustedUsedBytes, // Always sync with adjusted usage
             quotaExceededAt = if (isNowExceeded && !wasExceeded) System.currentTimeMillis() else currentState.quotaExceededAt,
             isBlocked = isNowExceeded && config.blockDurationMs > 0, // Only block if duration > 0
             blockedUntil = if (isNowExceeded && currentState.blockedUntil == null && config.blockDurationMs > 0) {
@@ -416,6 +437,16 @@ class QuotaManager @Inject constructor(
     }
     
     /**
+     * Check if quota system is enabled
+     */
+    fun isQuotaEnabled(): Boolean = config.enabled
+    
+    /**
+     * Expose current quota configuration
+     */
+    fun getConfig(): QuotaConfig = config
+    
+    /**
      * Get quota state for a client
      */
     fun getQuotaState(clientIp: String): QuotaState? {
@@ -434,8 +465,10 @@ class QuotaManager @Inject constructor(
      */
     fun resetQuota(clientIp: String) {
         val state = quotaStates[clientIp] ?: return
+        val actualUsage = getActualUsageFromTrafficMeter(clientIp)
         quotaStates[clientIp] = state.copy(
             usedBytes = 0,
+            usageBaselineBytes = actualUsage,
             quotaExceededAt = null,
             isBlocked = false,
             blockedUntil = null,
@@ -454,6 +487,24 @@ class QuotaManager @Inject constructor(
             resetQuota(clientIp)
         }
         Log.i(TAG, "All quotas reset")
+    }
+    
+    /**
+     * Manually unblock a client (used by monitoring UI)
+     * This clears the blocked flag immediately but keeps actual usage intact
+     */
+    fun unblockClient(clientIp: String) {
+        val state = quotaStates[clientIp] ?: return
+        val actualUsage = getActualUsageFromTrafficMeter(clientIp)
+        val adjustedUsage = calculateAdjustedUsage(state, actualUsage)
+        quotaStates[clientIp] = state.copy(
+            usedBytes = adjustedUsage,
+            quotaExceededAt = null,
+            isBlocked = false,
+            blockedUntil = null
+        )
+        removeBlockedClient(clientIp)
+        Log.i(TAG, "Manually unblocked client: $clientIp")
     }
     
     /**

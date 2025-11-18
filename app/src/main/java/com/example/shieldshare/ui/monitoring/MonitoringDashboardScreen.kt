@@ -27,11 +27,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.shieldshare.ui.monitoring.DeviceQuotaSnapshot
+import com.example.shieldshare.ui.monitoring.QuotaBadgeStatus
 import java.text.SimpleDateFormat
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.*
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 @Composable
 fun MonitoringDashboardScreen(
@@ -138,7 +142,12 @@ fun MonitoringDashboardScreen(
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             sortedDevices.forEach { device ->
-                                DeviceTrafficCard(device = device)
+                                DeviceTrafficCard(
+                                    device = device,
+                                    quotaEnabled = uiState.quotaEnabled,
+                                    quotaSnapshot = uiState.quotaSummaries[device.ipAddress],
+                                    onResetClientQuota = { viewModel.resetClientQuota(it) }
+                                )
                             }
                         }
                     }
@@ -748,23 +757,25 @@ private fun formatDateTime(timestamp: Long): String {
     return dateFormat.format(java.util.Date(timestamp))
 }
 
+private fun formatShortTime(timestamp: Long): String {
+    val dateFormat = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+    return dateFormat.format(java.util.Date(timestamp))
+}
+
 @Composable
-private fun DeviceTrafficCard(device: com.example.shieldshare.managers.meter.ClientTrafficStats) {
+private fun DeviceTrafficCard(
+    device: com.example.shieldshare.managers.meter.ClientTrafficStats,
+    quotaEnabled: Boolean,
+    quotaSnapshot: DeviceQuotaSnapshot?,
+    onResetClientQuota: (String) -> Unit
+) {
     var expanded by remember { mutableStateOf(false) }
+    var showQuotaDialog by remember { mutableStateOf(false) }
     
     // Use remember to avoid recalculating on every recomposition
     val totalBytes = remember(device.totalBytesUp, device.totalBytesDown) {
         device.totalBytesUp + device.totalBytesDown
     }
-    val uploadPercent = remember(device.totalBytesUp, totalBytes) {
-        if (totalBytes > 0) {
-            (device.totalBytesUp.toFloat() / totalBytes.toFloat() * 100).toInt()
-        } else 0
-    }
-    val timeSince = remember(device.lastSeen) {
-        formatTimeSince(device.lastSeen)
-    }
-    
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -808,23 +819,24 @@ private fun DeviceTrafficCard(device: com.example.shieldshare.managers.meter.Cli
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = timeSince,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontWeight = FontWeight.Medium
-                    )
+                    if (quotaEnabled && quotaSnapshot != null) {
+                        QuotaStatusChip(
+                            snapshot = quotaSnapshot,
+                            onRequestUnblock = {},
+                            enableInteraction = false
+                        )
+                    }
                     Icon(
-                        imageVector = if (expanded) 
-                            Icons.Default.ExpandLess 
-                        else 
+                        imageVector = if (expanded)
+                            Icons.Default.ExpandLess
+                        else
                             Icons.Default.ExpandMore,
                         contentDescription = if (expanded) "Collapse" else "Expand",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
-            
+
             // Expanded content
             if (expanded) {
                 Divider()
@@ -887,32 +899,8 @@ private fun DeviceTrafficCard(device: com.example.shieldshare.managers.meter.Cli
                     }
                 }
                 
-                // Progress bar showing upload/download ratio
-                if (totalBytes > 0) {
-                    LinearProgressIndicator(
-                        progress = uploadPercent / 100f,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(4.dp)
-                            .clip(RoundedCornerShape(2.dp)),
-                        color = MaterialTheme.colorScheme.primary,
-                        trackColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.3f)
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "$uploadPercent% upload",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = "${100 - uploadPercent}% download",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                if (quotaEnabled && quotaSnapshot != null) {
+                    QuotaUsageBar(snapshot = quotaSnapshot)
                 }
                 
                 // Speed indicators
@@ -945,25 +933,191 @@ private fun DeviceTrafficCard(device: com.example.shieldshare.managers.meter.Cli
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(
-                        text = "Connections: ${device.connectionCount}",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Medium
-                    )
-                    if (device.activeConnections > 0) {
+                    Column {
                         Text(
-                            text = "${device.activeConnections} active",
+                            text = "Connections: ${device.connectionCount}",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Medium
+                        )
+                        if (device.activeConnections > 0) {
+                            Text(
+                                text = "${device.activeConnections} active",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                    val shouldShowReset =
+                        quotaEnabled && quotaSnapshot != null &&
+                                (quotaSnapshot.status == QuotaBadgeStatus.BLOCKED ||
+                                        quotaSnapshot.usagePercentage >= 0.999)
+                    if (shouldShowReset) {
+                        ResetQuotaButton(
+                            onReset = { onResetClientQuota(device.ipAddress) }
                         )
                     }
                 }
             }
         }
+
+    if (showQuotaDialog && quotaSnapshot != null) {
+        AlertDialog(
+            onDismissRequest = { showQuotaDialog = false },
+            title = { Text("Client quota status") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "IP: ${device.ipAddress}\nUsage: ${formatBytes(quotaSnapshot.usedBytes)} / ${formatBytes(quotaSnapshot.allocatedBytes)}",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    if (quotaSnapshot.blockedUntil != null && quotaSnapshot.status == QuotaBadgeStatus.BLOCKED) {
+                        Text(
+                            text = "Blocked until ${formatShortTime(quotaSnapshot.blockedUntil)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        text = "Select \"Allow client\" to clear the block immediately. Usage is not reset, so the client may be blocked again if they stay above their quota.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onResetClientQuota(device.ipAddress)
+                        showQuotaDialog = false
+                    }
+                ) {
+                    Text("Allow client")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showQuotaDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
     }
 }
+
+@Composable
+private fun QuotaUsageBar(snapshot: DeviceQuotaSnapshot) {
+    val cappedUsedBytes = min(snapshot.usedBytes, snapshot.allocatedBytes)
+    val percent = if (snapshot.allocatedBytes > 0) {
+        cappedUsedBytes.toDouble() / snapshot.allocatedBytes.toDouble()
+    } else 0.0
+    val clampedPercent = percent.coerceIn(0.0, 1.0)
+    val percentLabel = (clampedPercent * 100).roundToInt()
+    val barColor = when (snapshot.status) {
+        QuotaBadgeStatus.ACTIVE -> MaterialTheme.colorScheme.primary
+        QuotaBadgeStatus.WARNING -> MaterialTheme.colorScheme.tertiary
+        QuotaBadgeStatus.BLOCKED -> MaterialTheme.colorScheme.error
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        LinearProgressIndicator(
+            progress = clampedPercent.toFloat(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(6.dp)
+                .clip(RoundedCornerShape(3.dp)),
+            color = barColor,
+            trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
+        )
+        Text(
+            text = when (snapshot.status) {
+                QuotaBadgeStatus.BLOCKED -> "${percentLabel}% of ${formatBytes(snapshot.allocatedBytes)} • Blocked"
+                QuotaBadgeStatus.WARNING -> "${percentLabel}% of ${formatBytes(snapshot.allocatedBytes)} • Near limit"
+                QuotaBadgeStatus.ACTIVE -> "${percentLabel}% of ${formatBytes(snapshot.allocatedBytes)} used"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun QuotaStatusChip(
+    snapshot: DeviceQuotaSnapshot,
+    onRequestUnblock: () -> Unit,
+    enableInteraction: Boolean = true
+) {
+    val (containerColor, contentColor, label, clickable) = when (snapshot.status) {
+        QuotaBadgeStatus.BLOCKED -> Quadruple(
+            MaterialTheme.colorScheme.errorContainer,
+            MaterialTheme.colorScheme.onErrorContainer,
+            snapshot.blockedUntil?.let { "Blocked until ${formatShortTime(it)}" } ?: "Blocked",
+            true
+        )
+        QuotaBadgeStatus.WARNING -> {
+            val percent = (snapshot.usagePercentage * 100).coerceAtMost(999.0).roundToInt()
+            Quadruple(
+                MaterialTheme.colorScheme.tertiaryContainer,
+                MaterialTheme.colorScheme.onTertiaryContainer,
+                "$percent% used",
+                false
+            )
+        }
+        QuotaBadgeStatus.ACTIVE -> Quadruple(
+            MaterialTheme.colorScheme.secondaryContainer,
+            MaterialTheme.colorScheme.onSecondaryContainer,
+            "Active",
+            false
+        )
+    }
+    
+    val chipModifier = if (clickable && enableInteraction) {
+        Modifier.clickable { onRequestUnblock() }
+    } else {
+        Modifier
+    }
+    
+    Surface(
+        color = containerColor,
+        contentColor = contentColor,
+        shape = RoundedCornerShape(50),
+        tonalElevation = 0.dp,
+        modifier = chipModifier
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+        )
+    }
+}
+
+@Composable
+private fun ResetQuotaButton(
+    onReset: () -> Unit
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        shape = RoundedCornerShape(50),
+        tonalElevation = 0.dp,
+        modifier = Modifier.clickable { onReset() }
+    ) {
+        Text(
+            text = "Reset",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+        )
+    }
+}
+
+private data class Quadruple<A, B, C, D>(
+    val first: A,
+    val second: B,
+    val third: C,
+    val fourth: D
+)
 
 // Helper function to get current time
 @Composable

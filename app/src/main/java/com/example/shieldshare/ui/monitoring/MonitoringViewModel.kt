@@ -12,6 +12,9 @@ import com.example.shieldshare.managers.proxy.ProxyServer
 import com.example.shieldshare.managers.vpn.VpnManager
 import com.example.shieldshare.managers.vpn.VpnStatus
 import com.example.shieldshare.managers.hotspot.HotspotManager
+import com.example.shieldshare.managers.quota.QuotaConfig
+import com.example.shieldshare.managers.quota.QuotaManager
+import com.example.shieldshare.managers.quota.QuotaState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -27,7 +30,8 @@ class MonitoringViewModel @Inject constructor(
     private val proxyServer: ProxyServer,
     private val trafficMeter: TrafficMeter,
     private val hotspotManager: HotspotManager,
-    private val trafficRepository: TrafficRepository
+    private val trafficRepository: TrafficRepository,
+    private val quotaManager: QuotaManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(MonitoringUiState())
@@ -145,6 +149,8 @@ class MonitoringViewModel @Inject constructor(
                 val totalBytesDown = trafficStats.sumOf { it.totalBytesDown }
                 
                 // Update state - let Compose handle optimization with keys
+                val (quotaEnabled, quotaSnapshots) = buildQuotaSnapshots(statsWithSpeeds)
+                
                 _uiState.value = _uiState.value.copy(
                     isProxyRunning = proxyInfo.isRunning,
                     activeConnections = proxyInfo.activeConnections,
@@ -152,7 +158,9 @@ class MonitoringViewModel @Inject constructor(
                     totalBytesUp = totalBytesUp,
                     totalBytesDown = totalBytesDown,
                     activeClients = trafficStats.size,
-                    rawLogs = rawLogs
+                    rawLogs = rawLogs,
+                    quotaEnabled = quotaEnabled,
+                    quotaSummaries = quotaSnapshots
                 )
                 kotlinx.coroutines.delay(UPDATE_INTERVAL_MS)
             }
@@ -207,6 +215,65 @@ class MonitoringViewModel @Inject constructor(
             }
         }
     }
+    
+    fun unblockClient(clientIp: String) {
+        viewModelScope.launch {
+            quotaManager.unblockClient(clientIp)
+            refreshQuotaSnapshots()
+        }
+    }
+    
+    fun resetClientQuota(clientIp: String) {
+        viewModelScope.launch {
+            quotaManager.resetQuota(clientIp)
+            refreshQuotaSnapshots()
+        }
+    }
+    
+    private fun refreshQuotaSnapshots() {
+        val currentStats = _uiState.value.trafficStats
+        val (quotaEnabled, quotaSnapshots) = buildQuotaSnapshots(currentStats)
+        _uiState.value = _uiState.value.copy(
+            quotaEnabled = quotaEnabled,
+            quotaSummaries = quotaSnapshots
+        )
+    }
+    
+    private fun buildQuotaSnapshots(trafficStats: List<ClientTrafficStats>): Pair<Boolean, Map<String, DeviceQuotaSnapshot>> {
+        if (!quotaManager.isQuotaEnabled()) {
+            return false to emptyMap()
+        }
+        
+        val config = quotaManager.getConfig()
+        val quotaStates = quotaManager.getAllQuotaStates()
+        
+        val snapshots = trafficStats.mapNotNull { stats ->
+            val state = quotaStates[stats.ipAddress] ?: return@mapNotNull null
+            val usagePercentage = if (state.allocatedQuotaBytes > 0) {
+                (state.usedBytes.toDouble() / state.allocatedQuotaBytes.toDouble()).coerceAtMost(1.0)
+            } else 0.0
+            DeviceQuotaSnapshot(
+                clientIp = stats.ipAddress,
+                usagePercentage = usagePercentage,
+                usedBytes = state.usedBytes,
+                allocatedBytes = state.allocatedQuotaBytes,
+                blockedUntil = state.blockedUntil,
+                status = mapQuotaStatus(state, config)
+            )
+        }.associateBy { it.clientIp }
+        
+        return true to snapshots
+    }
+    
+    private fun mapQuotaStatus(state: QuotaState, config: QuotaConfig): QuotaBadgeStatus {
+        return when {
+            config.blockDurationMs > 0 && state.isCurrentlyBlocked() -> QuotaBadgeStatus.BLOCKED
+            state.isExceeded && config.blockDurationMs == 0L -> QuotaBadgeStatus.WARNING
+            state.isWarningThresholdReached(config.warningThreshold) -> QuotaBadgeStatus.WARNING
+            state.isExceeded -> QuotaBadgeStatus.BLOCKED
+            else -> QuotaBadgeStatus.ACTIVE
+        }
+    }
 }
 
 data class MonitoringUiState(
@@ -215,6 +282,8 @@ data class MonitoringUiState(
     val isProxyRunning: Boolean = false,
     val activeConnections: Int = 0,
     val trafficStats: List<ClientTrafficStats> = emptyList(),
+    val quotaEnabled: Boolean = false,
+    val quotaSummaries: Map<String, DeviceQuotaSnapshot> = emptyMap(),
     val totalBytesUp: Long = 0,
     val totalBytesDown: Long = 0,
     val activeClients: Int = 0,
@@ -227,3 +296,18 @@ data class MonitoringUiState(
     // Aggregated traffic summary for all unique IPs (IP -> Pair<bytesUp, bytesDown>)
     val uniqueIpTrafficSummary: Map<String, Pair<Long, Long>> = emptyMap()
 )
+
+data class DeviceQuotaSnapshot(
+    val clientIp: String,
+    val usagePercentage: Double,
+    val usedBytes: Long,
+    val allocatedBytes: Long,
+    val blockedUntil: Long?,
+    val status: QuotaBadgeStatus
+)
+
+enum class QuotaBadgeStatus {
+    ACTIVE,
+    WARNING,
+    BLOCKED
+}
