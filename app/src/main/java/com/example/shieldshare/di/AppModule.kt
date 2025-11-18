@@ -12,6 +12,7 @@ import com.example.shieldshare.managers.hotspot.HotspotManagerImpl
 import com.example.shieldshare.managers.meter.TrafficMeter
 import com.example.shieldshare.managers.meter.TrafficMeterSimple
 import com.example.shieldshare.managers.network.IpAddressProvider
+import com.example.shieldshare.managers.quota.QuotaManager
 import com.example.shieldshare.managers.network.IpAddressProviderImpl
 import com.example.shieldshare.managers.proxy.ProxyServer
 import com.example.shieldshare.managers.proxy.ProxyServerImpl
@@ -176,13 +177,22 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideQuotaManager(
+        @ApplicationContext context: Context,
+        appPrefs: AppPrefs,
+        trafficMeter: TrafficMeter
+    ): QuotaManager = QuotaManager(context, appPrefs, trafficMeter)
+
+    @Provides
+    @Singleton
     fun provideProxyServer(
             @ApplicationContext context: Context,
             trafficMeter: TrafficMeter,
             vpnManager: VpnManager,
             hotspotManager: HotspotManager,
-            appPrefs: AppPrefs
-    ): ProxyServer = ProxyServerImpl(context, trafficMeter, vpnManager, hotspotManager, appPrefs)
+            appPrefs: AppPrefs,
+            quotaManager: QuotaManager
+    ): ProxyServer = ProxyServerImpl(context, trafficMeter, vpnManager, hotspotManager, appPrefs, quotaManager)
 
     @Provides
     @Singleton
