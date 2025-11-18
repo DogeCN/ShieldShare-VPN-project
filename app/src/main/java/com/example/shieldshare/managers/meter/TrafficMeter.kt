@@ -6,6 +6,11 @@ interface TrafficMeter {
     fun getCurrentStats(): List<ClientTrafficStats>
     fun getHistoricalStats(timeRange: TimeRange): List<ClientTrafficStats>
     fun mapIpToMac(): Map<String, String>
+    /**
+     * Reset/clear current session statistics.
+     * Called when a new service session starts to ensure clean state.
+     */
+    fun resetCurrentSessionStats()
 }
 
 class TrafficMeterNoop : TrafficMeter {
@@ -13,4 +18,5 @@ class TrafficMeterNoop : TrafficMeter {
     override fun getCurrentStats(): List<ClientTrafficStats> = emptyList()
     override fun getHistoricalStats(timeRange: TimeRange): List<ClientTrafficStats> = emptyList()
     override fun mapIpToMac(): Map<String, String> = emptyMap()
+    override fun resetCurrentSessionStats() {}
 }

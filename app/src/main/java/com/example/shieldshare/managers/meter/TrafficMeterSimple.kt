@@ -394,4 +394,33 @@ class TrafficMeterSimple @Inject constructor(
             return rawLogs.toList()
         }
     }
+    
+    /**
+     * Reset/clear current session statistics.
+     * Called when a new service session starts to ensure clean state.
+     * This clears per-device traffic stats and active sessions so new traffic
+     * doesn't accumulate on top of previous session data.
+     */
+    override fun resetCurrentSessionStats() {
+        // End all active client sessions first to ensure they're saved to database
+        val sessionsToEnd = activeSessions.values.toList()
+        val clientStatsCount = clientStats.size
+        
+        // End sessions asynchronously (they'll be saved to database)
+        sessionsToEnd.forEach { session ->
+            endSession(session.sessionId)
+        }
+        
+        // Clear in-memory stats synchronously to prevent race conditions
+        // This ensures new traffic doesn't accumulate on old data
+        clientStats.clear()
+        activeSessions.clear()
+        
+        // Reset global counters for the new session
+        totalBytesUp.set(0)
+        totalBytesDown.set(0)
+        
+        Log.i(TAG, "Current session stats reset - cleared ${sessionsToEnd.size} sessions and $clientStatsCount client stats")
+        addRawLog("Current session stats reset - starting fresh session")
+    }
 }

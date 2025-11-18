@@ -358,7 +358,12 @@ constructor(
         val bothActive = currentState.isProxyRunning && currentState.isVpnConnected
         
         if (bothActive && serviceSessionStartTime == null) {
-            // Start service session
+            // Reset per-device traffic stats FIRST to ensure clean state for new session
+            // This prevents new session traffic from accumulating on previous session data
+            // Must happen BEFORE marking session as started to avoid showing old data
+            trafficMeter.resetCurrentSessionStats()
+            
+            // Start service session AFTER stats are cleared
             val sessionId = java.util.UUID.randomUUID().toString()
             currentServiceSessionId = sessionId
             serviceSessionStartTime = System.currentTimeMillis()

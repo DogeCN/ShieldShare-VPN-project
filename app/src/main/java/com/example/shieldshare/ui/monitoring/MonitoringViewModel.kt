@@ -52,9 +52,33 @@ class MonitoringViewModel @Inject constructor(
         // Observe service sessions from database
         // Room Flow automatically emits when data changes, so we can collect directly
         viewModelScope.launch {
+            var previousActiveSessionId: String? = null
             trafficRepository.getAllServiceSessions()
                 .collect { serviceSessions ->
-                    _uiState.value = _uiState.value.copy(serviceSessions = serviceSessions)
+                    val activeSession = serviceSessions.find { it.isActive }
+                    val currentActiveSessionId = activeSession?.sessionId
+                    
+                    // Detect when a new active session starts (transition from no active session to active)
+                    val newSessionStarted = previousActiveSessionId == null && currentActiveSessionId != null
+                    
+                    if (newSessionStarted) {
+                        // Clear previous stats when a new session starts to prevent showing old data
+                        previousStats.clear()
+                        // Immediately update UI with empty stats to prevent showing stale data
+                        // Don't read from trafficMeter here to avoid any race conditions - just show empty
+                        _uiState.value = _uiState.value.copy(
+                            serviceSessions = serviceSessions,
+                            trafficStats = emptyList(), // Empty list ensures no old data is shown
+                            totalBytesUp = 0,
+                            totalBytesDown = 0,
+                            activeClients = 0
+                        )
+                    } else {
+                        _uiState.value = _uiState.value.copy(serviceSessions = serviceSessions)
+                    }
+                    
+                    previousActiveSessionId = currentActiveSessionId
+                    
                     // Automatically update database stats when service sessions change
                     loadDatabaseStats()
                     // Reload unique IP summary when sessions change
