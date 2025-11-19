@@ -14,6 +14,7 @@ import com.example.shieldshare.managers.meter.TrafficMeterSimple
 import com.example.shieldshare.managers.network.IpAddressProvider
 import com.example.shieldshare.managers.quota.QuotaManager
 import com.example.shieldshare.managers.network.IpAddressProviderImpl
+import com.example.shieldshare.managers.performance.PerformanceMonitor
 import com.example.shieldshare.managers.proxy.ProxyServer
 import com.example.shieldshare.managers.proxy.ProxyServerImpl
 import com.example.shieldshare.managers.sync.SyncManager
@@ -193,6 +194,14 @@ object AppModule {
             appPrefs: AppPrefs,
             quotaManager: QuotaManager
     ): ProxyServer = ProxyServerImpl(context, trafficMeter, vpnManager, hotspotManager, appPrefs, quotaManager)
+
+    @Provides
+    @Singleton
+    fun providePerformanceMonitor(
+        @ApplicationContext context: Context,
+        proxyServer: ProxyServer,
+        trafficMeter: TrafficMeter
+    ): PerformanceMonitor = PerformanceMonitor(context, proxyServer, trafficMeter)
 
     @Provides
     @Singleton
