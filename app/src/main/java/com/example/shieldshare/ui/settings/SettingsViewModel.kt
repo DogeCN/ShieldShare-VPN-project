@@ -8,6 +8,7 @@ import android.net.NetworkCapabilities
 import android.os.Build
 import com.example.shieldshare.data.prefs.AppPrefs
 import com.example.shieldshare.data.repository.TrafficRepository
+import com.example.shieldshare.managers.meter.TrafficMeter
 import com.example.shieldshare.managers.quota.QuotaManager
 import com.example.shieldshare.ui.theme.ThemeMode
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -25,6 +26,7 @@ constructor(
         private val appPrefs: AppPrefs,
         private val trafficRepository: TrafficRepository,
         private val quotaManager: QuotaManager,
+        private val trafficMeter: TrafficMeter,
         @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -145,6 +147,10 @@ constructor(
     /**
      * Detect available bandwidth using NetworkCapabilities API
      * Returns bandwidth in MB, or null if detection fails
+     * 
+     * The calculation accounts for current device count (clients + host) to ensure
+     * each device gets a reasonable allocation. Formula: (downstreamMbps * 100 * deviceCount)
+     * This ensures per-device allocation stays consistent regardless of device count.
      */
     fun detectBandwidth(): Long? {
         return try {
@@ -156,22 +162,29 @@ constructor(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 val downstreamBps = networkCapabilities.getLinkDownstreamBandwidthKbps()
                 
-                // Use downstream (download) bandwidth as primary indicator
-                // Convert from Kbps to MB (approximate monthly quota)
-                // Formula: (Kbps * 3600 seconds * 30 days) / (8 bits * 1024 * 1024) = MB per month
-                // But for quota purposes, we want a reasonable daily/hourly limit
-                // Let's use a conservative estimate: assume 80% of theoretical max
                 if (downstreamBps > 0) {
-                    // Convert Kbps to Mbps, then estimate monthly data cap
-                    // For quota, we'll suggest a daily limit based on typical usage
-                    // Example: 100 Mbps = ~1000 GB/month, but for quota we want daily/hourly limits
-                    // Let's suggest: (downstreamMbps * 100) MB as a reasonable quota
-                    // This gives ~100 MB per 1 Mbps, which is conservative
+                    // Convert Kbps to Mbps
                     val downstreamMbps = downstreamBps / 1000.0
-                    val suggestedMb = (downstreamMbps * 100).toLong()
                     
-                    // Cap at reasonable values (min 100 MB, max 10 GB)
-                    return suggestedMb.coerceIn(100, 10_000)
+                    // Base per-device allocation: ~100 MB per 1 Mbps
+                    val basePerDeviceMb = (downstreamMbps * 100).toLong()
+                    
+                    // Get current device count (clients + host)
+                    // Host is included in quota calculations, so we add 1
+                    val currentStats = trafficMeter.getCurrentStats()
+                    val clientCount = currentStats.size
+                    val totalDeviceCount = clientCount + 1 // +1 for host device
+                    
+                    // Use minimum of 1 device if no clients connected yet
+                    val deviceCount = totalDeviceCount.coerceAtLeast(1)
+                    
+                    // Calculate total bandwidth: base per device * device count
+                    // This ensures each device gets a reasonable allocation
+                    val suggestedMb = basePerDeviceMb * deviceCount
+                    
+                    // Cap at reasonable values (min 100 MB, max 100 GB)
+                    // Increased max to accommodate multiple devices
+                    return suggestedMb.coerceIn(100, 100_000)
                 }
             }
             
