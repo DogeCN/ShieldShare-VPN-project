@@ -26,6 +26,7 @@ import androidx.navigation.compose.rememberNavController
 import com.example.shieldshare.data.prefs.AppPrefs
 import com.example.shieldshare.ui.home.HomeScreen
 import com.example.shieldshare.ui.monitoring.MonitoringDashboardScreen
+import com.example.shieldshare.ui.performance.PerformanceScreen
 import com.example.shieldshare.ui.settings.SettingsScreen
 import com.example.shieldshare.ui.theme.ShieldShareTheme
 import com.example.shieldshare.ui.theme.ThemeMode
@@ -143,10 +144,15 @@ fun ShieldShareAppContent(onThemeChange: () -> Unit = {}) {
                 HomeScreen()
             }
             composable("monitoring") {
-                MonitoringDashboardScreen()
+                MonitoringDashboardScreen(navController = navController)
             }
             composable("settings") {
                 SettingsScreen(onThemeChanged = onThemeChange)
+            }
+            composable("performance") {
+                PerformanceScreen(
+                    onBack = { navController.popBackStack() }
+                )
             }
         }
     }
