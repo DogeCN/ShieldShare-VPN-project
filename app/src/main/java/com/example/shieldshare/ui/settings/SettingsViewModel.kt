@@ -1,11 +1,10 @@
 package com.example.shieldshare.ui.settings
 
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import android.content.Context
 import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import android.os.Build
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.example.shieldshare.data.prefs.AppPrefs
 import com.example.shieldshare.data.repository.TrafficRepository
 import com.example.shieldshare.managers.meter.TrafficMeter
@@ -40,12 +39,13 @@ constructor(
     private fun loadSettings() {
         viewModelScope.launch {
             val themeModeString = appPrefs.getString("theme_mode", "SYSTEM") ?: "SYSTEM"
-            val themeMode = try {
-                ThemeMode.valueOf(themeModeString)
-            } catch (e: Exception) {
-                ThemeMode.SYSTEM
-            }
-            
+            val themeMode =
+                    try {
+                        ThemeMode.valueOf(themeModeString)
+                    } catch (e: Exception) {
+                        ThemeMode.SYSTEM
+                    }
+
             _uiState.value =
                     SettingsUiState(
                             authEnabled = appPrefs.getBoolean("auth_enabled", false),
@@ -57,7 +57,8 @@ constructor(
                             // Quota settings (simplified)
                             quotaEnabled = appPrefs.getBoolean("quota_enabled", false),
                             quotaTotalBandwidthMb = appPrefs.getLong("quota_total_bandwidth_mb", 0),
-                            quotaBlockDurationHours = appPrefs.getInt("quota_block_duration_hours", 1)
+                            quotaBlockDurationHours =
+                                    appPrefs.getInt("quota_block_duration_hours", 1)
                     )
         }
     }
@@ -83,30 +84,26 @@ constructor(
         val currentState = _uiState.value
         // Prevent disabling if SOCKS5 is already disabled
         if (!enabled && !currentState.socks5Enabled) {
-            _uiState.value = currentState.copy(
-                validationError = "At least one proxy protocol must be enabled"
-            )
+            _uiState.value =
+                    currentState.copy(
+                            validationError = "At least one proxy protocol must be enabled"
+                    )
             return
         }
-        _uiState.value = currentState.copy(
-            httpHttpsEnabled = enabled,
-            validationError = null
-        )
+        _uiState.value = currentState.copy(httpHttpsEnabled = enabled, validationError = null)
     }
 
     fun updateSocks5Enabled(enabled: Boolean) {
         val currentState = _uiState.value
         // Prevent disabling if HTTP/HTTPS is already disabled
         if (!enabled && !currentState.httpHttpsEnabled) {
-            _uiState.value = currentState.copy(
-                validationError = "At least one proxy protocol must be enabled"
-            )
+            _uiState.value =
+                    currentState.copy(
+                            validationError = "At least one proxy protocol must be enabled"
+                    )
             return
         }
-        _uiState.value = currentState.copy(
-            socks5Enabled = enabled,
-            validationError = null
-        )
+        _uiState.value = currentState.copy(socks5Enabled = enabled, validationError = null)
     }
 
     fun saveSettings() {
@@ -117,77 +114,80 @@ constructor(
             appPrefs.putBoolean("notifications_enabled", state.notificationsEnabled)
             appPrefs.putBoolean("http_https_enabled", state.httpHttpsEnabled)
             appPrefs.putBoolean("socks5_enabled", state.socks5Enabled)
-            
+
             // Save quota settings (simplified - only essential ones)
             appPrefs.putBoolean("quota_enabled", state.quotaEnabled)
             if (state.quotaEnabled) {
                 appPrefs.putLong("quota_total_bandwidth_mb", state.quotaTotalBandwidthMb)
                 appPrefs.putInt("quota_block_duration_hours", state.quotaBlockDurationHours)
             }
-            
+
             // Reload quota configuration
             quotaManager.loadConfig()
         }
     }
-    
+
     // Quota settings update methods (simplified)
     fun updateQuotaEnabled(enabled: Boolean) {
         _uiState.value = _uiState.value.copy(quotaEnabled = enabled)
     }
-    
+
     fun updateQuotaSettings(totalBandwidthMb: Long, blockDurationHours: Int) {
-        _uiState.value = _uiState.value.copy(
-            quotaTotalBandwidthMb = totalBandwidthMb,
-            quotaBlockDurationHours = blockDurationHours
-        )
+        _uiState.value =
+                _uiState.value.copy(
+                        quotaTotalBandwidthMb = totalBandwidthMb,
+                        quotaBlockDurationHours = blockDurationHours
+                )
         // Save settings and reload quota config (which will clear blocks if duration is 0)
         saveSettings()
     }
-    
+
     /**
-     * Detect available bandwidth using NetworkCapabilities API
-     * Returns bandwidth in MB, or null if detection fails
-     * 
-     * The calculation accounts for current device count (clients + host) to ensure
-     * each device gets a reasonable allocation. Formula: (downstreamMbps * 100 * deviceCount)
-     * This ensures per-device allocation stays consistent regardless of device count.
+     * Detect available bandwidth using NetworkCapabilities API Returns bandwidth in MB, or null if
+     * detection fails
+     *
+     * The calculation accounts for current device count (clients + host) to ensure each device gets
+     * a reasonable allocation. Formula: (downstreamMbps * 100 * deviceCount) This ensures
+     * per-device allocation stays consistent regardless of device count.
      */
     fun detectBandwidth(): Long? {
         return try {
-            val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val connectivityManager =
+                    context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             val activeNetwork = connectivityManager.activeNetwork ?: return null
-            val networkCapabilities = connectivityManager.getNetworkCapabilities(activeNetwork) ?: return null
-            
+            val networkCapabilities =
+                    connectivityManager.getNetworkCapabilities(activeNetwork) ?: return null
+
             // Try to get link bandwidth (available on Android 6.0+)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 val downstreamBps = networkCapabilities.getLinkDownstreamBandwidthKbps()
-                
+
                 if (downstreamBps > 0) {
                     // Convert Kbps to Mbps
                     val downstreamMbps = downstreamBps / 1000.0
-                    
+
                     // Base per-device allocation: ~100 MB per 1 Mbps
                     val basePerDeviceMb = (downstreamMbps * 100).toLong()
-                    
+
                     // Get current device count (clients + host)
                     // Host is included in quota calculations, so we add 1
                     val currentStats = trafficMeter.getCurrentStats()
                     val clientCount = currentStats.size
                     val totalDeviceCount = clientCount + 1 // +1 for host device
-                    
+
                     // Use minimum of 1 device if no clients connected yet
                     val deviceCount = totalDeviceCount.coerceAtLeast(1)
-                    
+
                     // Calculate total bandwidth: base per device * device count
                     // This ensures each device gets a reasonable allocation
                     val suggestedMb = basePerDeviceMb * deviceCount
-                    
+
                     // Cap at reasonable values (min 100 MB, max 100 GB)
                     // Increased max to accommodate multiple devices
                     return suggestedMb.coerceIn(100, 100_000)
                 }
             }
-            
+
             null
         } catch (e: Exception) {
             null
@@ -195,42 +195,41 @@ constructor(
     }
 
     /**
-     * Clear all traffic data from the database.
-     * Shows loading state during operation and error/success messages.
+     * Clear all traffic data from the database. Shows loading state during operation and
+     * error/success messages.
      */
     fun clearTrafficData() {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(
-                isClearingDatabase = true,
-                clearDatabaseError = null,
-                clearDatabaseSuccess = false
-            )
-            
+            _uiState.value =
+                    _uiState.value.copy(
+                            isClearingDatabase = true,
+                            clearDatabaseError = null,
+                            clearDatabaseSuccess = false
+                    )
+
             try {
                 trafficRepository.clearAllTrafficData()
-                _uiState.value = _uiState.value.copy(
-                    isClearingDatabase = false,
-                    clearDatabaseSuccess = true,
-                    clearDatabaseError = null
-                )
+                _uiState.value =
+                        _uiState.value.copy(
+                                isClearingDatabase = false,
+                                clearDatabaseSuccess = true,
+                                clearDatabaseError = null
+                        )
             } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    isClearingDatabase = false,
-                    clearDatabaseSuccess = false,
-                    clearDatabaseError = "Failed to clear traffic data: ${e.message}"
-                )
+                _uiState.value =
+                        _uiState.value.copy(
+                                isClearingDatabase = false,
+                                clearDatabaseSuccess = false,
+                                clearDatabaseError = "Failed to clear traffic data: ${e.message}"
+                        )
             }
         }
     }
 
-    /**
-     * Reset clear database UI state (called after showing snackbar).
-     */
+    /** Reset clear database UI state (called after showing snackbar). */
     fun resetClearDatabaseState() {
-        _uiState.value = _uiState.value.copy(
-            clearDatabaseSuccess = false,
-            clearDatabaseError = null
-        )
+        _uiState.value =
+                _uiState.value.copy(clearDatabaseSuccess = false, clearDatabaseError = null)
     }
 }
 
