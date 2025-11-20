@@ -25,6 +25,26 @@ fun SettingsScreen(
     val uiState by viewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     var showClearConfirmationDialog by remember { mutableStateOf(false) }
+    var showQuotaConfigDialog by remember { mutableStateOf(false) }
+    
+    // Local state for quota dialog
+    var quotaBandwidthText by remember { mutableStateOf("") }
+    var quotaBlockHoursText by remember { mutableStateOf(uiState.quotaBlockDurationHours.toString()) }
+    
+    // Auto-detect bandwidth when dialog opens (if not already set)
+    LaunchedEffect(showQuotaConfigDialog) {
+        if (showQuotaConfigDialog) {
+            // If user already has a value, use it; otherwise auto-detect
+            if (uiState.quotaTotalBandwidthMb > 0) {
+                quotaBandwidthText = uiState.quotaTotalBandwidthMb.toString()
+            } else {
+                // Auto-detect bandwidth
+                val detected = viewModel.detectBandwidth()
+                quotaBandwidthText = detected?.toString() ?: ""
+            }
+            quotaBlockHoursText = uiState.quotaBlockDurationHours.toString()
+        }
+    }
 
     // Show validation error snackbar
     LaunchedEffect(uiState.validationError) {
@@ -247,6 +267,78 @@ fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
+                        text = "Traffic Quota",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+
+                    Text(
+                        text = "Limit bandwidth usage per client. Quotas are shared equally among all connected clients.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    // Enable Quota Toggle
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Enable Traffic Quota",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                text = if (uiState.quotaEnabled && uiState.quotaTotalBandwidthMb > 0) {
+                                    "${uiState.quotaTotalBandwidthMb} MB total, ${uiState.quotaBlockDurationHours}h block"
+                                } else {
+                                    "Limit bandwidth usage per client"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = uiState.quotaEnabled,
+                            onCheckedChange = { enabled ->
+                                viewModel.updateQuotaEnabled(enabled)
+                                if (enabled) {
+                                    showQuotaConfigDialog = true
+                                }
+                            }
+                        )
+                    }
+                    
+                    // Configure button (only show when enabled)
+                    if (uiState.quotaEnabled) {
+                        Button(
+                            onClick = { showQuotaConfigDialog = true },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("Configure Quota Settings")
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
                         text = "Data Management",
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.SemiBold
@@ -304,6 +396,85 @@ fun SettingsScreen(
         }
     }
 
+    // Quota configuration dialog
+    if (showQuotaConfigDialog) {
+        AlertDialog(
+            onDismissRequest = { showQuotaConfigDialog = false },
+            title = {
+                Text(
+                    text = "Configure Traffic Quota",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text(
+                        text = "Quotas are shared equally among all connected clients (including host).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    
+                    OutlinedTextField(
+                        value = quotaBandwidthText,
+                        onValueChange = { quotaBandwidthText = it },
+                        label = { Text("Total Bandwidth (MB)") },
+                        placeholder = { Text("Auto-detected or enter manually") },
+                        modifier = Modifier.fillMaxWidth(),
+                        supportingText = {
+                            Text(
+                                if (quotaBandwidthText.isEmpty()) {
+                                    "Bandwidth will be auto-detected when dialog opens"
+                                } else {
+                                    "Total bandwidth to share among all clients (auto-detected, you can change it)"
+                                }
+                            )
+                        },
+                        singleLine = true
+                    )
+                    
+                    OutlinedTextField(
+                        value = quotaBlockHoursText,
+                        onValueChange = { quotaBlockHoursText = it },
+                        label = { Text("Block Duration (Hours)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        supportingText = {
+                            Text("How long to block clients after quota exceeded (0 = no blocking, 1-168 hours)")
+                        },
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val bandwidth = quotaBandwidthText.toLongOrNull() ?: 0
+                        val blockHours = quotaBlockHoursText.toIntOrNull() ?: 0
+                        if (bandwidth > 0 && blockHours >= 0 && blockHours <= 168) {
+                            viewModel.updateQuotaSettings(bandwidth, blockHours)
+                            showQuotaConfigDialog = false
+                        }
+                    },
+                    enabled = quotaBandwidthText.toLongOrNull()?.let { it > 0 } == true &&
+                             quotaBlockHoursText.toIntOrNull()?.let { it in 0..168 } == true
+                ) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showQuotaConfigDialog = false }
+                ) {
+                    Text("Cancel")
+                }
+            },
+            containerColor = MaterialTheme.colorScheme.surface
+        )
+    }
+    
     // Confirmation dialog for clearing database
     if (showClearConfirmationDialog) {
         AlertDialog(

@@ -12,6 +12,8 @@ import com.example.shieldshare.R
 import com.example.shieldshare.data.prefs.AppPrefs
 import com.example.shieldshare.managers.hotspot.HotspotManager
 import com.example.shieldshare.managers.meter.TrafficMeter
+import com.example.shieldshare.managers.quota.QuotaManager
+import com.example.shieldshare.managers.quota.QuotaStatus
 import com.example.shieldshare.managers.vpn.VpnManager
 import com.example.shieldshare.managers.vpn.VpnStatus
 import com.example.shieldshare.managers.vpn.isVpnConnected
@@ -33,7 +35,8 @@ class ProxyServerImpl(
         private val trafficMeter: TrafficMeter,
         private val vpnManager: VpnManager,
         private val hotspotManager: HotspotManager,
-        private val appPrefs: AppPrefs
+        private val appPrefs: AppPrefs,
+        private val quotaManager: QuotaManager
 ) : ProxyServer {
     companion object {
         private const val TAG = "ProxyServerImpl"
@@ -194,6 +197,17 @@ class ProxyServerImpl(
                         }
                     }
 
+                    // Initialize notification channel proactively for instant notifications
+                    createClientNotificationChannel()
+                    
+                    // Setup quota exhaustion notification callback
+                    quotaManager.onQuotaExceeded = { clientIp, macAddress ->
+                        showQuotaExceededNotification(clientIp, macAddress)
+                    }
+                    
+                    // Load quota configuration
+                    quotaManager.loadConfig()
+                    
                     serviceScope.launch { startWebServer(config) }
                     serviceScope.launch { startClientCleanup() }
                     serviceScope.launch { startHandlerCleanup() }
@@ -331,6 +345,36 @@ class ProxyServerImpl(
 
         // Filter out host device IP - don't count it as a client
         val hostIp = hotspotManager.getHotspotIpAddress()
+        
+        // Check quota before accepting connection (for non-host clients)
+        // Note: We'll check protocol type later, so for now use HTTP response as default
+        if (hostIp == null || clientIp != hostIp) {
+            if (quotaManager.isClientBlocked(clientIp)) {
+                Log.w(TAG, "Connection rejected: Client $clientIp is blocked due to quota exhaustion")
+                try {
+                    // Try to detect protocol quickly for proper error response
+                    socket.soTimeout = 1000 // Short timeout
+                    val peek = socket.getInputStream().read()
+                    socket.soTimeout = 0
+                    if (peek == 0x05) {
+                        // SOCKS5
+                        sendSocks5GeneralFailure(socket)
+                    } else {
+                        // HTTP/HTTPS
+                        sendHttp503QuotaExceeded(socket)
+                    }
+                } catch (e: Exception) {
+                    // If detection fails, default to HTTP response
+                    try {
+                        sendHttp503QuotaExceeded(socket)
+                    } catch (ignored: Exception) {}
+                } finally {
+                    safeClose(socket)
+                }
+                return
+            }
+        }
+        
         if (hostIp != null && clientIp == hostIp) {
             Log.d(TAG, "Ignoring connection from host device IP: $clientIp")
             // Still process the connection, just don't count it as a client
@@ -352,6 +396,10 @@ class ProxyServerImpl(
                         Log.i(TAG, "Device name for new client $clientIp: $deviceName")
                     }
                 }
+                
+                // Initialize quotas when new client connects (synchronously to ensure quotas are set before traffic starts)
+                val connectedClientList = connectedClients.keys.toList()
+                quotaManager.initializeQuotas(connectedClientList, hostIp)
             } else {
                 Log.d(
                         TAG,
@@ -481,14 +529,18 @@ class ProxyServerImpl(
                     clientSocket = socket,
                     trafficMeter = trafficMeter,
                     socketFactory = socketFactory,
-                    inOverride = inOverride
+                    inOverride = inOverride,
+                    quotaManager = quotaManager
                 ) { bytesUp, bytesDown ->
                     try {
+                        val clientIpStr = socket.remoteSocketAddress.toString()
                         trafficMeter.recordTraffic(
-                            socket.remoteSocketAddress.toString(),
+                            clientIpStr,
                             bytesUp,
                             bytesDown
                         )
+                        // Quota usage is recorded incrementally in tunnelData (same as traffic metering)
+                        // No need to record here to avoid double-counting
                     } catch (e: Exception) {
                         Log.w(TAG, "Error recording traffic", e)
                     }
@@ -502,14 +554,18 @@ class ProxyServerImpl(
                     clientSocket = socket,
                     trafficMeter = trafficMeter,
                     socketFactory = socketFactory,
-                    inOverride = inOverride
+                    inOverride = inOverride,
+                    quotaManager = quotaManager
                 ) { bytesUp, bytesDown ->
                     try {
+                        val clientIpStr = socket.remoteSocketAddress.toString()
                         trafficMeter.recordTraffic(
-                            socket.remoteSocketAddress.toString(),
+                            clientIpStr,
                             bytesUp,
                             bytesDown
                         )
+                        // Quota usage is recorded incrementally in tunnelData (same as traffic metering)
+                        // No need to record here to avoid double-counting
                     } catch (e: Exception) {
                         Log.w(TAG, "Error recording traffic", e)
                     }
@@ -1203,6 +1259,18 @@ function isLocalNetwork(host) {
             socket.getOutputStream().flush()
         } catch (_: Throwable) {}
     }
+    
+    private fun sendHttp503QuotaExceeded(socket: Socket) {
+        try {
+            val msg = "HTTP/1.1 503 Service Unavailable\r\n" +
+                    "Connection: close\r\n" +
+                    "Content-Type: text/plain\r\n" +
+                    "Content-Length: 45\r\n\r\n" +
+                    "Quota exceeded. Please try again later."
+            socket.getOutputStream().write(msg.toByteArray(Charsets.US_ASCII))
+            socket.getOutputStream().flush()
+        } catch (_: Throwable) {}
+    }
 
     /**
      * In strict mode, reject SOCKS5: return GENERAL_FAILURE (VER=0x05, REP=0x01, RSV=0x00,
@@ -1347,6 +1415,62 @@ function isLocalNetwork(host) {
             Log.i(TAG, "Notification shown successfully for new client: $clientIp (ID: $notificationId)")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to show notification for new client: $clientIp", e)
+            e.printStackTrace()
+        }
+    }
+    
+    /**
+     * Show a notification when a client exhausts their quota
+     */
+    private fun showQuotaExceededNotification(clientIp: String, macAddress: String) {
+        try {
+            Log.i(TAG, "Attempting to show quota exceeded notification for client: $clientIp")
+            
+            // Check if notifications are enabled in settings
+            val notificationsEnabled = appPrefs.getBoolean("notifications_enabled", true)
+            if (!notificationsEnabled) {
+                Log.d(TAG, "Notifications disabled in settings, skipping quota notification for client: $clientIp")
+                return
+            }
+            
+            // Check notification permission (Android 13+)
+            if (!hasNotificationPermission()) {
+                Log.w(TAG, "Notification permission not granted. Cannot show quota notification for client: $clientIp")
+                return
+            }
+            
+            // Ensure notification channel exists
+            createClientNotificationChannel()
+            
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            
+            // Check if notifications are enabled for this channel
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = notificationManager.getNotificationChannel(CLIENT_NOTIFICATION_CHANNEL_ID)
+                if (channel != null && channel.importance == NotificationManager.IMPORTANCE_NONE) {
+                    Log.w(TAG, "Notification channel is disabled by user")
+                    return
+                }
+            }
+            
+            // Generate unique notification ID
+            val notificationId = CLIENT_NOTIFICATION_ID_BASE + (notificationCounter.getAndIncrement() % 1000) + 2000 // Offset to avoid conflicts
+            
+            val notification = NotificationCompat.Builder(context, CLIENT_NOTIFICATION_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle("Client Quota Exceeded")
+                .setContentText("Client IP: $clientIp (MAC/ID: ${macAddress})")
+                .setStyle(NotificationCompat.BigTextStyle()
+                    .bigText("A client has exhausted their traffic quota.\n\nClient IP: $clientIp\nMAC/ID: $macAddress\n\nThe client has been blocked for 1 hour."))
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setDefaults(NotificationCompat.DEFAULT_ALL) // Sound, vibration, lights
+                .setAutoCancel(true)
+                .build()
+            
+            notificationManager.notify(notificationId, notification)
+            Log.i(TAG, "Quota exceeded notification shown successfully for client: $clientIp (ID: $notificationId)")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to show quota exceeded notification for client: $clientIp", e)
             e.printStackTrace()
         }
     }

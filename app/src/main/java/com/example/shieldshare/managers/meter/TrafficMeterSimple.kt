@@ -71,66 +71,70 @@ class TrafficMeterSimple @Inject constructor(
      * Records traffic both in-memory (for real-time display) and persistently (via repository).
      */
     override fun recordTraffic(clientIp: String, bytesUp: Long, bytesDown: Long) {
-        scope.launch {
-            try {
-                // Normalize IP address to extract just the IP (remove port/socket info)
-                val normalizedIp = normalizeIpAddress(clientIp)
-                
-                // Update global counters
-                totalBytesUp.addAndGet(bytesUp)
-                totalBytesDown.addAndGet(bytesDown)
-                
-                // Update or create client stats - use normalized IP as key
-                val currentStats = clientStats[normalizedIp]
-                val macAddress = if (currentStats != null) {
-                    currentStats.macAddress
-                } else {
-                    resolveMacAddress(normalizedIp) // Resolve MAC address for new clients
-                }
-                
-                val updatedStats = if (currentStats != null) {
-                    currentStats.copy(
-                        totalBytesUp = currentStats.totalBytesUp + bytesUp,
-                        totalBytesDown = currentStats.totalBytesDown + bytesDown,
-                        lastSeen = System.currentTimeMillis(),
-                        connectionCount = currentStats.connectionCount + 1
-                    )
-                } else {
-                    ClientTrafficStats(
-                        clientId = normalizedIp,
-                        macAddress = macAddress,
-                        ipAddress = normalizedIp,
-                        totalBytesUp = bytesUp,
-                        totalBytesDown = bytesDown,
-                        lastSeen = System.currentTimeMillis(),
-                        connectionCount = 1
-                    )
-                }
-                
-                // Update in-memory cache (for real-time UI display)
-                clientStats[normalizedIp] = updatedStats
-
-                // Determine protocol from active session if available
-                val activeSession = activeSessions.values.find { 
-                    it.clientIp == normalizedIp && it.isActive 
-                }
-                val protocol = activeSession?.protocolType ?: "HTTP" // Default to HTTP if unknown
-
-                // Persist to database via repository (batched automatically)
-                trafficRepository.recordTraffic(
-                    clientIp = normalizedIp,
-                    macAddress = macAddress,
-                    bytesUploaded = bytesUp,
-                    bytesDownloaded = bytesDown,
-                    protocol = protocol,
-                    sessionId = activeSession?.sessionId
-                )
-
-                Log.d(TAG, "Traffic recorded for $normalizedIp (from $clientIp): ↑${bytesUp}B ↓${bytesDown}B")
-                addRawLog("Traffic recorded for $normalizedIp (${macAddress}): ↑${bytesUp}B ↓${bytesDown}B")
-            } catch (e: Exception) {
-                Log.e(TAG, "Error recording traffic for $clientIp", e)
+        try {
+            // Normalize IP address to extract just the IP (remove port/socket info)
+            val normalizedIp = normalizeIpAddress(clientIp)
+            
+            // Update global counters
+            totalBytesUp.addAndGet(bytesUp)
+            totalBytesDown.addAndGet(bytesDown)
+            
+            // Update or create client stats - use normalized IP as key
+            val currentStats = clientStats[normalizedIp]
+            val macAddress = if (currentStats != null) {
+                currentStats.macAddress
+            } else {
+                resolveMacAddress(normalizedIp) // Resolve MAC address for new clients
             }
+            
+            val updatedStats = if (currentStats != null) {
+                currentStats.copy(
+                    totalBytesUp = currentStats.totalBytesUp + bytesUp,
+                    totalBytesDown = currentStats.totalBytesDown + bytesDown,
+                    lastSeen = System.currentTimeMillis(),
+                    connectionCount = currentStats.connectionCount + 1
+                )
+            } else {
+                ClientTrafficStats(
+                    clientId = normalizedIp,
+                    macAddress = macAddress,
+                    ipAddress = normalizedIp,
+                    totalBytesUp = bytesUp,
+                    totalBytesDown = bytesDown,
+                    lastSeen = System.currentTimeMillis(),
+                    connectionCount = 1
+                )
+            }
+            
+            // Update in-memory cache (for real-time UI display)
+            clientStats[normalizedIp] = updatedStats
+
+            // Determine protocol from active session if available
+            val activeSession = activeSessions.values.find { 
+                it.clientIp == normalizedIp && it.isActive 
+            }
+            val protocol = activeSession?.protocolType ?: "HTTP" // Default to HTTP if unknown
+
+            // Persist to database via repository (batched automatically) without blocking caller
+            scope.launch {
+                try {
+                    trafficRepository.recordTraffic(
+                        clientIp = normalizedIp,
+                        macAddress = macAddress,
+                        bytesUploaded = bytesUp,
+                        bytesDownloaded = bytesDown,
+                        protocol = protocol,
+                        sessionId = activeSession?.sessionId
+                    )
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error persisting traffic for $normalizedIp", e)
+                }
+            }
+
+            Log.d(TAG, "Traffic recorded for $normalizedIp (from $clientIp): ↑${bytesUp}B ↓${bytesDown}B")
+            addRawLog("Traffic recorded for $normalizedIp (${macAddress}): ↑${bytesUp}B ↓${bytesDown}B")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error recording traffic for $clientIp", e)
         }
     }
     

@@ -2,6 +2,9 @@ package com.example.shieldshare.managers.proxy
 
 import android.util.Log
 import com.example.shieldshare.managers.meter.TrafficMeter
+import com.example.shieldshare.managers.meter.TrafficMeterSimple
+import com.example.shieldshare.managers.quota.QuotaManager
+import com.example.shieldshare.managers.quota.QuotaStatus
 import java.io.*
 import java.net.*
 import java.util.concurrent.atomic.AtomicLong
@@ -14,6 +17,7 @@ class Socks5ProxyHandler(
         trafficMeter: TrafficMeter,
         private val socketFactory: SocketFactory,
         private val inOverride: InputStream? = null,
+        private val quotaManager: QuotaManager? = null,
         private val trafficCallback: (bytesUp: Long, bytesDown: Long) -> Unit = { _, _ -> }
 ) : ProxyHandler(clientSocket, trafficMeter) {
     companion object {
@@ -371,15 +375,43 @@ class Socks5ProxyHandler(
         val buffer = ByteArray(BUFFER_SIZE)
         var total = 0L
         var flushCounter = 0
+        var readCount = 0
         try {
             while (true) {
                 try {
                     val n = input.read(buffer)
                     if (n <= 0) break
                     
+                    readCount++
+                    total += n
+                    
+                    // Check quota more frequently during transfer (every 10 reads or every 8KB to catch quota exceeded earlier)
+                    // We check if current quota state + running total of this connection exceeds quota
+                    // Quota usage is recorded incrementally in tunnelData finally block, same as traffic metering
+                    if (quotaManager != null && (readCount % 10 == 0 || total % 8192 == 0L)) {
+                        try {
+                            // Check if adding the current connection's total would exceed quota
+                            val quotaStatus = quotaManager.checkQuota(clientIp, total)
+                            when (quotaStatus) {
+                                is QuotaStatus.Blocked -> {
+                                    Log.w(TAG, "Client $clientIp is blocked due to quota - closing connection")
+                                    break
+                                }
+                                is QuotaStatus.Exceeded -> {
+                                    Log.w(TAG, "Client $clientIp has exceeded quota (used $total bytes in this connection) - closing connection")
+                                    break
+                                }
+                                else -> {
+                                    // Quota OK, continue
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Error checking quota during transfer", e)
+                        }
+                    }
+                    
                     try {
                         forwardThroughVpn(buffer, n, output)
-                        total += n
                         
                         // Flush every 4 reads for better performance
                         flushCounter++
@@ -418,14 +450,25 @@ class Socks5ProxyHandler(
             // Record traffic statistics asynchronously to avoid blocking
             val finalTotal = total
             scope.launch {
+                // Get MAC address from TrafficMeter (same way we do for other features)
+                val macAddress = try {
+                    (trafficMeter as? TrafficMeterSimple)?.mapIpToMac()?.get(clientIp) ?: null
+                } catch (e: Exception) {
+                    null
+                }
+                
                 if (isUpload) {
                     bytesUp.addAndGet(finalTotal)
                     trafficMeter.recordTraffic(clientIp, finalTotal, 0)
                     Log.d(TAG, "↑ Upload: $finalTotal bytes from $clientIp")
+                    // Record quota usage incrementally (same as traffic metering) with MAC address
+                    quotaManager?.recordUsage(clientIp, finalTotal, 0, macAddress)
                 } else {
                     bytesDown.addAndGet(finalTotal)
                     trafficMeter.recordTraffic(clientIp, 0, finalTotal)
                     Log.d(TAG, "↓ Download: $finalTotal bytes to $clientIp")
+                    // Record quota usage incrementally (same as traffic metering) with MAC address
+                    quotaManager?.recordUsage(clientIp, 0, finalTotal, macAddress)
                 }
             }
         }
