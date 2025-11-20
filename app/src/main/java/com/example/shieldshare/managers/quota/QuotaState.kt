@@ -8,6 +8,7 @@ data class QuotaState(
     val macAddress: String,
     val allocatedQuotaBytes: Long,        // Total quota allocated to this client
     val usedBytes: Long = 0,               // Current usage
+    val usageBaselineBytes: Long = 0,      // Baseline for usage offsets (for manual resets)
     val quotaExceededAt: Long? = null,     // Timestamp when quota was exceeded
     val isBlocked: Boolean = false,         // Whether client is currently blocked
     val blockedUntil: Long? = null,        // Timestamp until which client is blocked
