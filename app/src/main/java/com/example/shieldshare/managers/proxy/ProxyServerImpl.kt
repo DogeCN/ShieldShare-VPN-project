@@ -14,6 +14,7 @@ import com.example.shieldshare.managers.hotspot.HotspotManager
 import com.example.shieldshare.managers.meter.TrafficMeter
 import com.example.shieldshare.managers.quota.QuotaManager
 import com.example.shieldshare.managers.quota.QuotaStatus
+import com.example.shieldshare.managers.filter.TrafficFilterManager
 import com.example.shieldshare.managers.vpn.VpnManager
 import com.example.shieldshare.managers.vpn.VpnStatus
 import com.example.shieldshare.managers.vpn.isVpnConnected
@@ -36,12 +37,15 @@ class ProxyServerImpl(
         private val vpnManager: VpnManager,
         private val hotspotManager: HotspotManager,
         private val appPrefs: AppPrefs,
-        private val quotaManager: QuotaManager
+        private val quotaManager: QuotaManager,
+        private val trafficFilterManager: TrafficFilterManager? = null
 ) : ProxyServer {
     companion object {
         private const val TAG = "ProxyServerImpl"
         private const val CLIENT_NOTIFICATION_CHANNEL_ID = "client_notifications"
+        private const val ABUSE_NOTIFICATION_CHANNEL_ID = "abuse_notifications"
         private const val CLIENT_NOTIFICATION_ID_BASE = 1000
+        private const val ABUSE_NOTIFICATION_ID_BASE = 3000
         private val notificationCounter = AtomicInteger(0)
     }
 
@@ -530,7 +534,8 @@ class ProxyServerImpl(
                     trafficMeter = trafficMeter,
                     socketFactory = socketFactory,
                     inOverride = inOverride,
-                    quotaManager = quotaManager
+                    quotaManager = quotaManager,
+                    trafficFilterManager = trafficFilterManager
                 ) { bytesUp, bytesDown ->
                     try {
                         val clientIpStr = socket.remoteSocketAddress.toString()
@@ -555,7 +560,8 @@ class ProxyServerImpl(
                     trafficMeter = trafficMeter,
                     socketFactory = socketFactory,
                     inOverride = inOverride,
-                    quotaManager = quotaManager
+                    quotaManager = quotaManager,
+                    trafficFilterManager = trafficFilterManager
                 ) { bytesUp, bytesDown ->
                     try {
                         val clientIpStr = socket.remoteSocketAddress.toString()
@@ -1325,6 +1331,29 @@ function isLocalNetwork(host) {
     }
     
     /**
+     * Create notification channel for abuse detection notifications
+     */
+    private fun createAbuseNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            // Check if channel already exists
+            if (notificationManager.getNotificationChannel(ABUSE_NOTIFICATION_CHANNEL_ID) == null) {
+                val channel = NotificationChannel(
+                    ABUSE_NOTIFICATION_CHANNEL_ID,
+                    "Abuse Detection",
+                    NotificationManager.IMPORTANCE_HIGH // Use HIGH importance so notifications show up
+                ).apply {
+                    description = "Notifications when clients are flagged for bandwidth abuse"
+                    enableVibration(true)
+                    enableLights(true)
+                }
+                notificationManager.createNotificationChannel(channel)
+                Log.d(TAG, "Created abuse notification channel: $ABUSE_NOTIFICATION_CHANNEL_ID")
+            }
+        }
+    }
+    
+    /**
      * Create notification channel for client notifications
      */
     private fun createClientNotificationChannel() {
@@ -1472,6 +1501,90 @@ function isLocalNetwork(host) {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to show quota exceeded notification for client: $clientIp", e)
             e.printStackTrace()
+        }
+    }
+    
+    /**
+     * Show a notification when abuse is detected
+     */
+    fun showAbuseDetectedNotification(clientIp: String, abuseRatio: Float, globalAverage: Long) {
+        try {
+            Log.i(TAG, "Attempting to show abuse detection notification for client: $clientIp")
+            
+            // Check if notifications are enabled in settings
+            val notificationsEnabled = appPrefs.getBoolean("notifications_enabled", true)
+            if (!notificationsEnabled) {
+                Log.d(TAG, "Notifications disabled in settings, skipping abuse notification for client: $clientIp")
+                return
+            }
+            
+            // Check notification permission (Android 13+)
+            if (!hasNotificationPermission()) {
+                Log.w(TAG, "Notification permission not granted. Cannot show abuse notification for client: $clientIp")
+                return
+            }
+            
+            // Ensure notification channel exists
+            createAbuseNotificationChannel()
+            
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            
+            // Check if notifications are enabled for this channel
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = notificationManager.getNotificationChannel(ABUSE_NOTIFICATION_CHANNEL_ID)
+                if (channel != null && channel.importance == NotificationManager.IMPORTANCE_NONE) {
+                    Log.w(TAG, "Abuse notification channel is disabled by user")
+                    return
+                }
+            }
+            
+            // Generate unique notification ID
+            val notificationId = ABUSE_NOTIFICATION_ID_BASE + (notificationCounter.getAndIncrement() % 1000)
+            
+            // Create intent to open Advanced Traffic Regulation screen
+            val intent = android.content.Intent().apply {
+                setClassName(context, "com.example.shieldshare.MainActivity")
+                flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra("navigate_to", "advanced-traffic-regulation")
+            }
+            val pendingIntent = android.app.PendingIntent.getActivity(
+                context,
+                notificationId,
+                intent,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+            )
+            
+            val notification = NotificationCompat.Builder(context, ABUSE_NOTIFICATION_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle("⚠️ Data Leak Detected")
+                .setContentText("Client $clientIp shows sustained high-rate activity (${String.format("%.1f", abuseRatio)}× baseline rate)")
+                .setStyle(NotificationCompat.BigTextStyle()
+                    .bigText("A client has been flagged for data leak pattern.\n\nClient IP: $clientIp\nCurrent Rate: ${String.format("%.1f", abuseRatio)}× baseline rate\nBaseline Rate: ${formatBytes(globalAverage)}/hour\n\nSustained high-rate transfer detected for 15+ minutes.\n\nThis may indicate:\n• Data exfiltration or leak\n• Unauthorized access\n• Compromised device\n\nTap to investigate and block in Advanced Traffic Regulation."))
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setDefaults(NotificationCompat.DEFAULT_ALL) // Sound, vibration, lights
+                .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
+                .addAction(
+                    R.drawable.ic_launcher_foreground,
+                    "View Details",
+                    pendingIntent
+                )
+                .build()
+            
+            notificationManager.notify(notificationId, notification)
+            Log.i(TAG, "Abuse detection notification shown successfully for client: $clientIp (ID: $notificationId)")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to show abuse detection notification for client: $clientIp", e)
+            e.printStackTrace()
+        }
+    }
+    
+    private fun formatBytes(bytes: Long): String {
+        return when {
+            bytes < 1024 -> "$bytes B"
+            bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+            bytes < 1024 * 1024 * 1024 -> "${bytes / (1024 * 1024)} MB"
+            else -> "${bytes / (1024 * 1024 * 1024)} GB"
         }
     }
 }

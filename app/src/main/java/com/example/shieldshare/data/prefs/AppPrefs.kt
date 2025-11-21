@@ -83,4 +83,16 @@ class AppPrefs(context: Context) {
         sp.edit().putBoolean(key, value).apply()
     }
     fun getBoolean(key: String, def: Boolean = false): Boolean = sp.getBoolean(key, def)
+
+    // StringSet support (stored as comma-separated string for compatibility)
+    fun putStringSet(key: String, value: Set<String>) {
+        val serialized = value.joinToString(separator = ",")
+        sp.edit().putString(key, serialized).apply()
+    }
+    
+    fun getStringSet(key: String, def: Set<String> = emptySet()): Set<String> {
+        val serialized = sp.getString(key, null) ?: return def
+        if (serialized.isEmpty()) return def
+        return serialized.split(",").filter { it.isNotBlank() }.toSet()
+    }
 }

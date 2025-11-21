@@ -23,7 +23,8 @@ import javax.inject.Singleton
 class QuotaManager @Inject constructor(
     private val context: Context,
     private val appPrefs: AppPrefs,
-    private val trafficMeter: TrafficMeter
+    private val trafficMeter: TrafficMeter,
+    private val consumptionTracker: com.example.shieldshare.managers.consumption.ConsumptionTracker? = null
 ) {
     companion object {
         private const val TAG = "QuotaManager"
@@ -116,9 +117,17 @@ class QuotaManager @Inject constructor(
             return
         }
         
-        val quotaPerClient = config.totalBandwidthBytes / totalClients
-        val quotaPerClientMb = quotaPerClient.toDouble() / (1024 * 1024)
-        Log.i(TAG, "Initializing quotas: $totalClients clients, ${String.format("%.2f", quotaPerClientMb)} MB per client (${quotaPerClient} bytes)")
+        // Check if abuse detection is enabled
+        val abuseDetectionEnabled = appPrefs.getBoolean("dynamic_quota_enabled", false)
+        val abuseThresholdMultiplier = appPrefs.getFloat("dynamic_quota_multiplier", 2.0f)
+        val averagePeriodDays = appPrefs.getInt("dynamic_quota_average_days", 7) // Default: 7 days (weekly)
+        
+        // Always use static quota for allocation (equal distribution)
+        // Abuse detection is separate - it flags/clips abusers but doesn't change base allocation
+        val baseQuotaPerClient = config.totalBandwidthBytes / totalClients
+        
+        val quotaPerClientMb = baseQuotaPerClient.toDouble() / (1024 * 1024)
+        Log.i(TAG, "Initializing quotas: $totalClients clients, ${String.format("%.2f", quotaPerClientMb)} MB per client (${baseQuotaPerClient} bytes) [Abuse Detection: $abuseDetectionEnabled]")
         
         // Update quotas for existing clients
         // IMPORTANT: When recalculating quotas (e.g., after settings change or new client connects),
@@ -129,20 +138,35 @@ class QuotaManager @Inject constructor(
             val macAddress = existingState?.macAddress ?: "unknown"
             val actualUsage = getActualUsageFromTrafficMeter(clientIp)
             
+            // Base quota is always static (equal distribution)
+            var quotaForClient = baseQuotaPerClient
+            
+            // Apply abuse detection: Cap quota if client is abusing
+            if (abuseDetectionEnabled && consumptionTracker != null) {
+                val abuseCheck = consumptionTracker.checkAbuse(clientIp, abuseThresholdMultiplier, averagePeriodDays)
+                if (abuseCheck.isAbusing) {
+                    // Client is abusing - cap their quota at the threshold
+                    // This prevents them from using more than N× global average
+                    val cappedQuota = abuseCheck.threshold.coerceAtMost(baseQuotaPerClient)
+                    Log.w(TAG, "ABUSE DETECTED: $clientIp using ${String.format("%.1f", abuseCheck.abuseRatio)}× global average. Capping quota from ${formatBytes(baseQuotaPerClient)} to ${formatBytes(cappedQuota)}")
+                    quotaForClient = cappedQuota
+                }
+            }
+            
             // If quota allocation changed significantly (more than 10% difference), reset usage for fairness
             val shouldResetUsage = existingState?.let { 
                 val oldQuota = it.allocatedQuotaBytes
-                val quotaChange = kotlin.math.abs(quotaPerClient - oldQuota).toDouble() / oldQuota.coerceAtLeast(1)
+                val quotaChange = kotlin.math.abs(quotaForClient - oldQuota).toDouble() / oldQuota.coerceAtLeast(1)
                 quotaChange > 0.1 // More than 10% change
             } ?: true // New client, always reset
             
             val baseline = existingState?.usageBaselineBytes ?: actualUsage
             val adjustedUsage = existingState?.let { calculateAdjustedUsage(it, actualUsage) } ?: 0L
             val newBaseline = if (shouldResetUsage) actualUsage else baseline
-            val newUsed = if (shouldResetUsage) 0 else adjustedUsage.coerceAtMost(quotaPerClient)
+            val newUsed = if (shouldResetUsage) 0 else adjustedUsage.coerceAtMost(quotaForClient)
             
             quotaStates[clientIp] = existingState?.copy(
-                allocatedQuotaBytes = quotaPerClient,
+                allocatedQuotaBytes = quotaForClient,
                 usedBytes = newUsed,
                 usageBaselineBytes = newBaseline,
                 quotaExceededAt = if (shouldResetUsage) null else existingState.quotaExceededAt,
@@ -152,7 +176,7 @@ class QuotaManager @Inject constructor(
             ) ?: QuotaState(
                 clientIp = clientIp,
                 macAddress = macAddress,
-                allocatedQuotaBytes = quotaPerClient,
+                allocatedQuotaBytes = quotaForClient,
                 usedBytes = 0,
                 usageBaselineBytes = actualUsage,
                 resetAt = System.currentTimeMillis()
@@ -163,18 +187,32 @@ class QuotaManager @Inject constructor(
         hostIp?.let { ip ->
             val existingState = quotaStates[ip]
             val actualUsage = getActualUsageFromTrafficMeter(ip)
+            
+            // Base quota for host is always static (equal distribution)
+            var quotaForHost = baseQuotaPerClient
+            
+            // Apply abuse detection: Cap quota if host is abusing
+            if (abuseDetectionEnabled && consumptionTracker != null) {
+                val abuseCheck = consumptionTracker.checkAbuse(ip, abuseThresholdMultiplier, averagePeriodDays)
+                if (abuseCheck.isAbusing) {
+                    val cappedQuota = abuseCheck.threshold.coerceAtMost(baseQuotaPerClient)
+                    Log.w(TAG, "ABUSE DETECTED: HOST ($ip) using ${String.format("%.1f", abuseCheck.abuseRatio)}× global average. Capping quota from ${formatBytes(baseQuotaPerClient)} to ${formatBytes(cappedQuota)}")
+                    quotaForHost = cappedQuota
+                }
+            }
+            
             val shouldResetUsage = existingState?.let { 
                 val oldQuota = it.allocatedQuotaBytes
-                val quotaChange = kotlin.math.abs(quotaPerClient - oldQuota).toDouble() / oldQuota.coerceAtLeast(1)
+                val quotaChange = kotlin.math.abs(quotaForHost - oldQuota).toDouble() / oldQuota.coerceAtLeast(1)
                 quotaChange > 0.1
             } ?: true
             val baseline = existingState?.usageBaselineBytes ?: actualUsage
             val adjustedUsage = existingState?.let { calculateAdjustedUsage(it, actualUsage) } ?: 0L
             val newBaseline = if (shouldResetUsage) actualUsage else baseline
-            val newUsed = if (shouldResetUsage) 0 else adjustedUsage.coerceAtMost(quotaPerClient)
+            val newUsed = if (shouldResetUsage) 0 else adjustedUsage.coerceAtMost(quotaForHost)
             
             quotaStates[ip] = existingState?.copy(
-                allocatedQuotaBytes = quotaPerClient,
+                allocatedQuotaBytes = quotaForHost,
                 usedBytes = newUsed,
                 usageBaselineBytes = newBaseline,
                 quotaExceededAt = if (shouldResetUsage) null else existingState.quotaExceededAt,
@@ -184,7 +222,7 @@ class QuotaManager @Inject constructor(
             ) ?: QuotaState(
                 clientIp = ip,
                 macAddress = "HOST",
-                allocatedQuotaBytes = quotaPerClient,
+                allocatedQuotaBytes = quotaForHost,
                 usedBytes = 0,
                 usageBaselineBytes = actualUsage,
                 resetAt = System.currentTimeMillis()
@@ -342,6 +380,18 @@ class QuotaManager @Inject constructor(
             return
         }
         
+        // Update consumption tracker periodically (every 10 quota checks to avoid overhead)
+        // This ensures consumption is tracked in real-time
+        consumptionTracker?.let { tracker ->
+            scope.launch {
+                try {
+                    tracker.updateDailyConsumption(clientIp)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error updating consumption for $clientIp", e)
+                }
+            }
+        }
+        
         var currentState = quotaStates[clientIp]
         if (currentState == null) {
             Log.w(TAG, "No quota state found for $clientIp - creating provisional state")
@@ -454,6 +504,18 @@ class QuotaManager @Inject constructor(
     }
     
     /**
+     * Helper function to format bytes
+     */
+    private fun formatBytes(bytes: Long): String {
+        return when {
+            bytes < 1024 -> "$bytes B"
+            bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+            bytes < 1024 * 1024 * 1024 -> "${bytes / (1024 * 1024)} MB"
+            else -> "${bytes / (1024 * 1024 * 1024)} GB"
+        }
+    }
+    
+    /**
      * Get all quota states
      */
     fun getAllQuotaStates(): Map<String, QuotaState> {
@@ -505,6 +567,41 @@ class QuotaManager @Inject constructor(
         )
         removeBlockedClient(clientIp)
         Log.i(TAG, "Manually unblocked client: $clientIp")
+    }
+    
+    /**
+     * Manually block a client (for abuse detection or manual intervention)
+     * Blocks the client for a specified duration (default: 24 hours)
+     * 
+     * @param clientIp Client IP address to block
+     * @param blockDurationMs Block duration in milliseconds (default: 24 hours)
+     */
+    fun blockClient(clientIp: String, blockDurationMs: Long = 24 * 60 * 60 * 1000L) {
+        val state = quotaStates[clientIp]
+        val blockedUntil = System.currentTimeMillis() + blockDurationMs
+        
+        if (state != null) {
+            quotaStates[clientIp] = state.copy(
+                isBlocked = true,
+                blockedUntil = blockedUntil
+            )
+        } else {
+            // Create a new state for blocking
+            val actualUsage = getActualUsageFromTrafficMeter(clientIp)
+            quotaStates[clientIp] = QuotaState(
+                clientIp = clientIp,
+                macAddress = "unknown",
+                allocatedQuotaBytes = config.totalBandwidthBytes.coerceAtLeast(1),
+                usedBytes = 0,
+                usageBaselineBytes = actualUsage,
+                isBlocked = true,
+                blockedUntil = blockedUntil,
+                resetAt = System.currentTimeMillis()
+            )
+        }
+        
+        saveBlockedClient(clientIp, blockedUntil)
+        Log.w(TAG, "Manually blocked client: $clientIp (blocked until ${java.util.Date(blockedUntil)})")
     }
     
     /**

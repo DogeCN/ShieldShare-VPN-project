@@ -28,6 +28,7 @@ import com.example.shieldshare.ui.home.HomeScreen
 import com.example.shieldshare.ui.monitoring.MonitoringDashboardScreen
 import com.example.shieldshare.ui.performance.PerformanceScreen
 import com.example.shieldshare.ui.settings.SettingsScreen
+import com.example.shieldshare.ui.advanced.AdvancedTrafficRegulationScreen
 import com.example.shieldshare.ui.theme.ShieldShareTheme
 import com.example.shieldshare.ui.theme.ThemeMode
 import dagger.hilt.android.AndroidEntryPoint
@@ -38,14 +39,17 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
+        // Check if we need to navigate to a specific screen (from notification)
+        val navigateTo = intent.getStringExtra("navigate_to")
+        
         setContent {
-            MainAppContent()
+            MainAppContent(initialDestination = navigateTo)
         }
     }
 }
 
 @Composable
-fun MainAppContent() {
+fun MainAppContent(initialDestination: String? = null) {
     val context = LocalContext.current
     val appPrefs = remember { AppPrefs(context) }
     
@@ -103,8 +107,20 @@ fun loadThemeMode(appPrefs: AppPrefs): ThemeMode {
 }
 
 @Composable
-fun ShieldShareAppContent(onThemeChange: () -> Unit = {}) {
+fun ShieldShareAppContent(onThemeChange: () -> Unit = {}, initialDestination: String? = null) {
     val navController = rememberNavController()
+    
+    // Navigate to initial destination if provided (from notification)
+    LaunchedEffect(initialDestination) {
+        initialDestination?.let { destination ->
+            navController.navigate(destination) {
+                popUpTo(navController.graph.startDestinationId) {
+                    inclusive = false
+                }
+                launchSingleTop = true
+            }
+        }
+    }
     
     Scaffold(
         bottomBar = {
@@ -147,12 +163,18 @@ fun ShieldShareAppContent(onThemeChange: () -> Unit = {}) {
                 MonitoringDashboardScreen(navController = navController)
             }
             composable("settings") {
-                SettingsScreen(onThemeChanged = onThemeChange)
+                SettingsScreen(
+                    navController = navController,
+                    onThemeChanged = onThemeChange
+                )
             }
             composable("performance") {
                 PerformanceScreen(
                     onBack = { navController.popBackStack() }
                 )
+            }
+            composable("advanced-traffic-regulation") {
+                AdvancedTrafficRegulationScreen(navController = navController)
             }
         }
     }

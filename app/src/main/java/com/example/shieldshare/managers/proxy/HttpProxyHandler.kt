@@ -5,6 +5,8 @@ import com.example.shieldshare.managers.meter.TrafficMeter
 import com.example.shieldshare.managers.meter.TrafficMeterSimple
 import com.example.shieldshare.managers.quota.QuotaManager
 import com.example.shieldshare.managers.quota.QuotaStatus
+import com.example.shieldshare.managers.filter.TrafficFilterManager
+import com.example.shieldshare.managers.filter.FilterResult
 import java.io.*
 import java.net.*
 import java.net.InetSocketAddress
@@ -24,6 +26,7 @@ class HttpProxyHandler(
         private val socketFactory: SocketFactory,
         private val inOverride: InputStream? = null,
         private val quotaManager: QuotaManager? = null,
+        private val trafficFilterManager: TrafficFilterManager? = null,
         private val trafficCallback: (bytesUp: Long, bytesDown: Long) -> Unit = { _, _ -> }
 ) : ProxyHandler(clientSocket, trafficMeter) {
     companion object {
@@ -260,6 +263,19 @@ class HttpProxyHandler(
             return@withContext
         }
 
+        // NEW: Optional filter check (only if manager provided AND enabled)
+        // SAFETY: Early return if disabled, zero overhead
+        trafficFilterManager?.let { filter ->
+            if (filter.isFilteringEnabled()) {
+                val filterResult = filter.shouldAllowConnection(host, port, clientIp)
+                if (filterResult is FilterResult.BLOCK) {
+                    Log.d(TAG, "Connection blocked by filter: $host:$port (reason: ${filterResult.reason})")
+                    sendErrorResponse(writer, 403, filterResult.reason)
+                    return@withContext
+                }
+            }
+        }
+
         // Track target host for session
         hostsAccessed.add(host)
         // (trafficMeter as? TrafficMeterSimple)?.updateSessionTarget(sessionId, host) //
@@ -436,6 +452,19 @@ class HttpProxyHandler(
         if (host == null || port <= 0) {
             sendErrorResponse(writer, 400, "Bad Request - Invalid URL/Host")
             return@withContext true // Close connection on error
+        }
+
+        // NEW: Optional filter check (only if manager provided AND enabled)
+        // SAFETY: Early return if disabled, zero overhead
+        trafficFilterManager?.let { filter ->
+            if (filter.isFilteringEnabled()) {
+                val filterResult = filter.shouldAllowConnection(host, port, clientIp)
+                if (filterResult is FilterResult.BLOCK) {
+                    Log.d(TAG, "HTTP request blocked by filter: $host:$port (reason: ${filterResult.reason})")
+                    sendErrorResponse(writer, 403, filterResult.reason)
+                    return@withContext true // Close connection on error
+                }
+            }
         }
 
         hostsAccessed.add(host)
