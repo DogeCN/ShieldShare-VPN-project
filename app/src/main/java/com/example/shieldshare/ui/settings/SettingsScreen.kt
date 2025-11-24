@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Delete
@@ -12,6 +13,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
@@ -221,32 +224,50 @@ fun SettingsScreen(
 
                                                 Divider()
 
-                                                // Authentication Toggle
-                                                Row(
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        horizontalArrangement =
-                                                                Arrangement.SpaceBetween,
-                                                        verticalAlignment =
-                                                                Alignment.CenterVertically
-                                                ) {
-                                                        Text(
-                                                                text = "Enable Authentication",
-                                                                style =
-                                                                        MaterialTheme.typography
-                                                                                .bodyMedium
-                                                        )
-                                                        Switch(
-                                                                checked = uiState.authEnabled,
-                                                                onCheckedChange = { enabled ->
-                                                                        viewModel.updateAuthEnabled(
-                                                                                enabled
-                                                                        )
-                                                                }
-                                                        )
-                                                }
-                                        }
+                    // Authentication Toggle
+                    Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                                text = "Enable Authentication",
+                                style = MaterialTheme.typography.bodyMedium
+                        )
+                        Switch(
+                                checked = uiState.authEnabled,
+                                onCheckedChange = { enabled ->
+                                    viewModel.updateAuthEnabled(enabled)
                                 }
-                        }
+                        )
+                    }
+
+                    if (uiState.authEnabled) {
+                        OutlinedTextField(
+                                value = uiState.authUsername,
+                                onValueChange = { viewModel.updateAuthUsername(it) },
+                                label = { Text("Proxy Username") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                        )
+                        OutlinedTextField(
+                                value = uiState.authPassword,
+                                onValueChange = { viewModel.updateAuthPassword(it) },
+                                label = { Text("Proxy Password") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                visualTransformation = PasswordVisualTransformation(),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+                        )
+                        Text(
+                                text = "Credentials are stored securely on this device. Share them with clients that should use the proxy.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
 
                         item {
                                 Card(

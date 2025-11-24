@@ -1,5 +1,6 @@
 package com.example.shieldshare.managers.proxy
 
+import android.util.Base64
 import android.util.Log
 import com.example.shieldshare.managers.meter.TrafficMeter
 import com.example.shieldshare.managers.meter.TrafficMeterSimple
@@ -26,6 +27,9 @@ class HttpProxyHandler(
         private val socketFactory: SocketFactory,
         private val inOverride: InputStream? = null,
         private val quotaManager: QuotaManager? = null,
+        private val authEnabled: Boolean = false,
+        private val authUsername: String? = null,
+        private val authPassword: String? = null,
         private val trafficFilterManager: TrafficFilterManager? = null,
         private val trafficCallback: (bytesUp: Long, bytesDown: Long) -> Unit = { _, _ -> }
 ) : ProxyHandler(clientSocket, trafficMeter) {
@@ -238,20 +242,95 @@ class HttpProxyHandler(
 
         val method = parts[0]
         val url = parts[1]
+        val headers = readHeaders(reader)
+
+        if (!validateProxyAuthentication(headers, writer)) {
+            return@withContext RequestResult.CLOSE
+        }
 
         if (method.equals(CONNECT_METHOD, ignoreCase = true)) {
-            handleConnectRequest(reader, writer, url)
+            handleConnectRequest(writer, headers, url)
             RequestResult.CONNECT
         } else {
-            val closeConnection = handleHttpRequest(reader, writer, method, url)
+            val closeConnection = handleHttpRequest(writer, headers, method, url)
             if (closeConnection) RequestResult.CLOSE else RequestResult.SUCCESS
         }
     }
 
+    private fun readHeaders(reader: BufferedReader): List<String> {
+        val headers = mutableListOf<String>()
+        var line: String?
+        while (reader.readLine().also { line = it } != null && line!!.isNotEmpty()) {
+            headers.add(line!!)
+        }
+        return headers
+    }
+
+    private fun validateProxyAuthentication(
+        headers: List<String>,
+        writer: PrintWriter
+    ): Boolean {
+        if (!isAuthConfigured()) {
+            return true
+        }
+
+        val headerLine =
+                headers.firstOrNull { it.startsWith("Proxy-Authorization", ignoreCase = true) }
+        if (headerLine.isNullOrBlank()) {
+            Log.w(TAG, "Proxy auth header missing for client $clientIp")
+            sendProxyAuthRequired(writer)
+            return false
+        }
+
+        val credentials = parseBasicCredentials(headerLine)
+        if (credentials == null) {
+            Log.w(TAG, "Proxy auth header invalid for client $clientIp")
+            sendProxyAuthRequired(writer)
+            return false
+        }
+
+        val (username, password) = credentials
+        val valid = username == authUsername && password == authPassword
+        if (!valid) {
+            Log.w(TAG, "Proxy auth failed for client $clientIp (username mismatch)")
+            sendProxyAuthRequired(writer)
+        }
+        return valid
+    }
+
+    private fun parseBasicCredentials(headerLine: String): Pair<String, String>? {
+        val value = headerLine.substringAfter(":", "").trim()
+        if (!value.startsWith("Basic", ignoreCase = true)) {
+            return null
+        }
+        val token = value.substringAfter(" ", missingDelimiterValue = "").trim()
+        if (token.isEmpty()) {
+            return null
+        }
+        return try {
+            val decoded = Base64.decode(token, Base64.NO_WRAP)
+            val credentialPair = String(decoded, Charsets.UTF_8)
+            val separatorIndex = credentialPair.indexOf(':')
+            if (separatorIndex == -1) {
+                null
+            } else {
+                val username = credentialPair.substring(0, separatorIndex)
+                val password = credentialPair.substring(separatorIndex + 1)
+                username to password
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun isAuthConfigured(): Boolean {
+        return authEnabled && !authUsername.isNullOrEmpty() && !authPassword.isNullOrEmpty()
+    }
+
     /** CONNECT method: establish a TCP tunnel and pump bytes both ways */
     private suspend fun handleConnectRequest(
-        reader: BufferedReader,
         writer: PrintWriter,
+        headers: List<String>,
         url: String
     ) = withContext(Dispatchers.IO) {
         val connectStartTime = System.currentTimeMillis()
@@ -274,6 +353,10 @@ class HttpProxyHandler(
                     return@withContext
                 }
             }
+        }
+
+        headers.firstOrNull { it.startsWith("User-Agent:", ignoreCase = true) }?.let { header ->
+            userAgent = header.substringAfter(":").trim()
         }
 
         // Track target host for session
@@ -412,27 +495,21 @@ class HttpProxyHandler(
     /** Plain HTTP proxying (no TLS termination)
      * @return true if connection should close, false if keep-alive is possible */
     private suspend fun handleHttpRequest(
-        reader: BufferedReader,
         writer: PrintWriter,
+        headers: List<String>,
         method: String,
         url: String
     ): Boolean = withContext(Dispatchers.IO) {
         val requestStartTime = System.currentTimeMillis()
         Log.i(TAG, "[PERF] HTTP request START: $method $url | Time: $requestStartTime")
 
-        // Read all headers (text-mode)
-        val headers = mutableListOf<String>()
-        var line: String?
         var contentLength: Int? = null
-        while (reader.readLine().also { line = it } != null && line!!.isNotEmpty()) {
-            val h = line!!
-            headers.add(h)
-            if (h.lowercase().startsWith("user-agent:")) {
-                userAgent = h.substringAfter(":").trim()
+        headers.forEach { header ->
+            if (header.startsWith("user-agent:", ignoreCase = true)) {
+                userAgent = header.substringAfter(":").trim()
             }
-            // Extract Content-Length for POST/PUT requests
-            if (h.lowercase().startsWith("content-length:")) {
-                contentLength = h.substringAfter(":").trim().toIntOrNull()
+            if (header.startsWith("content-length:", ignoreCase = true)) {
+                contentLength = header.substringAfter(":").trim().toIntOrNull()
             }
         }
 
@@ -480,7 +557,8 @@ class HttpProxyHandler(
         // Build request preface to forward to target
         val sb = StringBuilder()
         sb.append("$method $path $HTTP_VERSION\r\n")
-        headers.forEach { h -> sb.append(h).append("\r\n") }
+        headers.filterNot { it.startsWith("Proxy-Authorization", ignoreCase = true) }
+                .forEach { h -> sb.append(h).append("\r\n") }
         // If client wants keep-alive, we'll handle it, but always add Connection header for clarity
         if (!headers.any { it.startsWith("Connection:", ignoreCase = true) }) {
             sb.append("Connection: ${if (isKeepAlive) "keep-alive" else "close"}\r\n")
@@ -804,6 +882,19 @@ class HttpProxyHandler(
         writer.println("$HTTP_VERSION $code $message")
         writer.println("Content-Type: text/plain")
         writer.println("Content-Length: ${message.length}")
+        writer.println()
+        writer.println(message)
+        writer.flush()
+    }
+
+    private fun sendProxyAuthRequired(writer: PrintWriter) {
+        val message = "Proxy authentication required"
+        writer.println("$HTTP_VERSION 407 Proxy Authentication Required")
+        writer.println("Proxy-Agent: ShieldShare/1.0")
+        writer.println("Proxy-Authenticate: Basic realm=\"ShieldShare Proxy\"")
+        writer.println("Content-Type: text/plain")
+        writer.println("Content-Length: ${message.length}")
+        writer.println("Connection: close")
         writer.println()
         writer.println(message)
         writer.flush()

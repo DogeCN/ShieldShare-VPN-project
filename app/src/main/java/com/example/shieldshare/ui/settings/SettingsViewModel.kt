@@ -49,6 +49,8 @@ constructor(
             _uiState.value =
                     SettingsUiState(
                             authEnabled = appPrefs.getBoolean("auth_enabled", false),
+                            authUsername = appPrefs.getString("proxy_username", "") ?: "",
+                            authPassword = appPrefs.getString("proxy_password", "") ?: "",
                             themeMode = themeMode,
                             notificationsEnabled =
                                     appPrefs.getBoolean("notifications_enabled", true),
@@ -63,9 +65,16 @@ constructor(
         }
     }
 
-    // TODO: Add authentication functionality
     fun updateAuthEnabled(enabled: Boolean) {
-        _uiState.value = _uiState.value.copy(authEnabled = enabled)
+        _uiState.value = _uiState.value.copy(authEnabled = enabled, validationError = null)
+    }
+
+    fun updateAuthUsername(username: String) {
+        _uiState.value = _uiState.value.copy(authUsername = username)
+    }
+
+    fun updateAuthPassword(password: String) {
+        _uiState.value = _uiState.value.copy(authPassword = password)
     }
 
     fun updateThemeMode(themeMode: ThemeMode) {
@@ -109,7 +118,20 @@ constructor(
     fun saveSettings() {
         viewModelScope.launch {
             val state = _uiState.value
+
+            if (state.authEnabled &&
+                    (state.authUsername.isBlank() || state.authPassword.isBlank())) {
+                _uiState.value =
+                        state.copy(
+                                validationError =
+                                        "Username and password are required when authentication is enabled"
+                        )
+                return@launch
+            }
+
             appPrefs.putBoolean("auth_enabled", state.authEnabled)
+            appPrefs.putString("proxy_username", state.authUsername)
+            appPrefs.putString("proxy_password", state.authPassword)
             appPrefs.putString("theme_mode", state.themeMode.name)
             appPrefs.putBoolean("notifications_enabled", state.notificationsEnabled)
             appPrefs.putBoolean("http_https_enabled", state.httpHttpsEnabled)
@@ -235,6 +257,8 @@ constructor(
 
 data class SettingsUiState(
         val authEnabled: Boolean = false,
+        val authUsername: String = "",
+        val authPassword: String = "",
         val themeMode: ThemeMode = ThemeMode.SYSTEM,
         val notificationsEnabled: Boolean = true,
         val httpHttpsEnabled: Boolean = true,

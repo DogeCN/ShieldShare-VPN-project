@@ -172,6 +172,19 @@ constructor(
         viewModelScope.launch {
             try {
                 val authEnabled = appPrefs.getBoolean("auth_enabled", false)
+                val proxyUsername =
+                        appPrefs.getString("proxy_username", "")?.takeIf { it.isNotBlank() }
+                val proxyPassword =
+                        appPrefs.getString("proxy_password", "")?.takeIf { it.isNotBlank() }
+                val effectiveAuthEnabled =
+                        authEnabled && proxyUsername != null && proxyPassword != null
+
+                if (authEnabled && !effectiveAuthEnabled) {
+                    Log.w(
+                            "HomeViewModel",
+                            "Proxy authentication enabled but credentials missing; starting without auth"
+                    )
+                }
                 val httpHttpsEnabled = appPrefs.getBoolean("http_https_enabled", true)
                 val socks5Enabled = appPrefs.getBoolean("socks5_enabled", true)
 
@@ -189,7 +202,9 @@ constructor(
 
                 val config =
                         ProxyConfig(
-                                authEnabled = authEnabled,
+                                authEnabled = effectiveAuthEnabled,
+                                authUsername = proxyUsername,
+                                authPassword = proxyPassword,
                                 allowedClients = emptyList(),
                                 proxyType = proxyType
                         )
@@ -199,7 +214,7 @@ constructor(
                         onSuccess = { proxyInstance ->
                             Log.i(
                                     "HomeViewModel",
-                                    "Proxy servers started (HTTP/HTTPS ${config.httpPort}, SOCKS5 ${config.socks5Port}): $proxyInstance"
+                                    "Proxy servers started. HTTP/HTTPS ${config.httpPort}, SOCKS5 ${config.socks5Port}, auth=${config.authEnabled}"
                             )
                             val hotspotIp = hotspotManager.getHotspotIpAddress()
                             val pacUrl =
