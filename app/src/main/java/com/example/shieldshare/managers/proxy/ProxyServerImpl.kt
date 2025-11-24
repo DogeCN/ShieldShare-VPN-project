@@ -328,6 +328,14 @@ class ProxyServerImpl(
         val clientAddress = socket.remoteSocketAddress.toString()
         Log.i(TAG, "[PERF] handleClientConnection START: $clientAddress | Time: $connectionStartTime")
 
+        val instanceConfig = currentInstance?.config
+        val authConfigured =
+                instanceConfig?.authEnabled == true &&
+                        !instanceConfig.authUsername.isNullOrEmpty() &&
+                        !instanceConfig.authPassword.isNullOrEmpty()
+        val authUsername = if (authConfigured) instanceConfig?.authUsername else null
+        val authPassword = if (authConfigured) instanceConfig?.authPassword else null
+
         // Validate socket connection to prevent crashes
         if (socket.isClosed || !socket.isConnected) {
             Log.w(TAG, "Invalid socket connection, closing")
@@ -530,7 +538,10 @@ class ProxyServerImpl(
                     trafficMeter = trafficMeter,
                     socketFactory = socketFactory,
                     inOverride = inOverride,
-                    quotaManager = quotaManager
+                    quotaManager = quotaManager,
+                    authEnabled = authConfigured,
+                    authUsername = authUsername,
+                    authPassword = authPassword
                 ) { bytesUp, bytesDown ->
                     try {
                         val clientIpStr = socket.remoteSocketAddress.toString()
@@ -555,7 +566,10 @@ class ProxyServerImpl(
                     trafficMeter = trafficMeter,
                     socketFactory = socketFactory,
                     inOverride = inOverride,
-                    quotaManager = quotaManager
+                    quotaManager = quotaManager,
+                    authEnabled = authConfigured,
+                    authUsername = authUsername,
+                    authPassword = authPassword
                 ) { bytesUp, bytesDown ->
                     try {
                         val clientIpStr = socket.remoteSocketAddress.toString()
@@ -826,6 +840,14 @@ class ProxyServerImpl(
     private fun generatePacFile(hotspotIp: String, config: ProxyConfig): String {
         val httpPort = config.httpPort
         val socksPort = config.socks5Port
+        val authNotice =
+                if (config.authEnabled &&
+                        !config.authUsername.isNullOrEmpty() &&
+                        !config.authPassword.isNullOrEmpty()) {
+                    "\n    // Authentication enabled - configure proxy username/password on this device"
+                } else {
+                    ""
+                }
 
         val proxyList = buildList {
             when (config.proxyType) {
@@ -847,6 +869,7 @@ class ProxyServerImpl(
 function FindProxyForURL(url, host) {
     // ShieldShare PAC Configuration
     // Generated automatically for hotspot clients
+$authNotice
     
     // Direct access for local networks
     if (isLocalNetwork(host)) {
@@ -888,6 +911,10 @@ function isLocalNetwork(host) {
         val socksPort = config.socks5Port
         val portalPort = ProxyPortManager.CONFIG_PORT
         val pacUrl = "http://$hotspotIp:$portalPort/proxy.pac"
+        val authConfigured =
+                config.authEnabled &&
+                        !config.authUsername.isNullOrEmpty() &&
+                        !config.authPassword.isNullOrEmpty()
 
         // Build manual proxy settings list based on enabled protocols
         val manualProxySettings = buildList {
@@ -912,6 +939,22 @@ function isLocalNetwork(host) {
                 }
             }
         }
+
+        val authSection =
+                if (authConfigured) {
+                    """
+        <div class="config-section">
+            <h3>Proxy Credentials</h3>
+            <p>Enter these credentials when prompted by ShieldShare proxy authentication.</p>
+            <ul>
+                <li>Username: <span class="mini-code">${config.authUsername}</span></li>
+                <li>Password: <span class="mini-code">${config.authPassword}</span></li>
+            </ul>
+        </div>
+                    """.trimIndent()
+                } else {
+                    ""
+                }
 
         // Build alert message for auto-configure based on enabled protocols
         val alertMessage =
@@ -952,7 +995,8 @@ function isLocalNetwork(host) {
         
         <div class="info">
             <strong>Gateway:</strong> $hotspotIp<br>
-            <strong>PAC URL:</strong> $pacUrl
+            <strong>PAC URL:</strong> $pacUrl<br>
+            <strong>Authentication:</strong> ${if (authConfigured) "Enabled" else "Disabled"}
         </div>
         
         <div class="config-section">
@@ -976,6 +1020,7 @@ function isLocalNetwork(host) {
             <div class="code">$pacUrl</div>
             <p><small>Copy this URL to your device's Proxy Auto-Configuration settings</small></p>
         </div>
+        $authSection
     </div>
     
     <script>

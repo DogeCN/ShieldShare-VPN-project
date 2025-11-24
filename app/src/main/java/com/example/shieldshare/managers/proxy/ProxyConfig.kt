@@ -6,6 +6,8 @@ data class ProxyConfig(
         val httpsPort: Int = ProxyPortManager.HTTPS_PORT,
         val socks5Port: Int = ProxyPortManager.SOCKS5_PORT,
         val authEnabled: Boolean = false,
+        val authUsername: String? = null,
+        val authPassword: String? = null,
         val allowedClients: List<String> = emptyList(),
         val proxyType: ProxyType = ProxyType.BOTH
 )

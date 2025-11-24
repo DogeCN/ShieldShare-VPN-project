@@ -18,6 +18,9 @@ class Socks5ProxyHandler(
         private val socketFactory: SocketFactory,
         private val inOverride: InputStream? = null,
         private val quotaManager: QuotaManager? = null,
+        private val authEnabled: Boolean = false,
+        private val authUsername: String? = null,
+        private val authPassword: String? = null,
         private val trafficCallback: (bytesUp: Long, bytesDown: Long) -> Unit = { _, _ -> }
 ) : ProxyHandler(clientSocket, trafficMeter) {
     companion object {
@@ -124,16 +127,22 @@ class Socks5ProxyHandler(
                     val methods = ByteArray(methodCount)
                     if (input.read(methods) != methods.size) return@withContext false
 
-                    // Check if no authentication is supported
                     val supportsNoAuth = methods.contains(AUTH_METHOD_NONE.toByte())
                     val supportsUserPass = methods.contains(AUTH_METHOD_USERNAME_PASSWORD.toByte())
+                    val authRequired = isAuthConfigured()
 
                     val selectedMethod =
                             when {
-                                supportsNoAuth -> AUTH_METHOD_NONE
-                                supportsUserPass -> AUTH_METHOD_USERNAME_PASSWORD
+                                authRequired && supportsUserPass -> AUTH_METHOD_USERNAME_PASSWORD
+                                !authRequired && supportsNoAuth -> AUTH_METHOD_NONE
+                                !authRequired && supportsUserPass -> AUTH_METHOD_USERNAME_PASSWORD
                                 else -> {
-                                    Log.w(TAG, "No supported authentication methods")
+                                    Log.w(
+                                            TAG,
+                                            "No supported authentication methods (required=$authRequired)"
+                                    )
+                                    output.write(byteArrayOf(SOCKS_VERSION.toByte(), 0xFF.toByte()))
+                                    output.flush()
                                     return@withContext false
                                 }
                             }
@@ -173,16 +182,26 @@ class Socks5ProxyHandler(
                 val password = ByteArray(passwordLength)
                 input.read(password)
 
-                // For now, accept any username/password (implement proper auth later)
                 val usernameStr = String(username)
                 val passwordStr = String(password)
-                Log.d(TAG, "Authentication attempt: user=$usernameStr")
+                val valid =
+                        if (!isAuthConfigured()) {
+                            true
+                        } else {
+                            val matches =
+                                    usernameStr == authUsername && passwordStr == authPassword
+                            if (!matches) {
+                                Log.w(TAG, "SOCKS5 auth failed for $clientIp (user mismatch)")
+                            }
+                            matches
+                        }
 
-                // Send success response
-                output.write(byteArrayOf(0x01, 0x00))
+                val statusByte: Byte = if (valid) 0x00 else 0x01
+                output.write(byteArrayOf(0x01, statusByte))
                 output.flush()
 
-                true
+                valid
+
             } catch (e: Exception) {
                 Log.e(TAG, "Error during username/password auth", e)
                 false
@@ -254,6 +273,10 @@ class Socks5ProxyHandler(
                 Pair(null, -1)
             }
         }
+
+    private fun isAuthConfigured(): Boolean {
+        return authEnabled && !authUsername.isNullOrEmpty() && !authPassword.isNullOrEmpty()
+    }
 
 
     private suspend fun establishTargetConnection(
