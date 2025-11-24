@@ -13,6 +13,8 @@ import com.example.shieldshare.managers.meter.TrafficMeter
 import com.example.shieldshare.managers.meter.TrafficMeterSimple
 import com.example.shieldshare.managers.network.IpAddressProvider
 import com.example.shieldshare.managers.quota.QuotaManager
+import com.example.shieldshare.managers.filter.TrafficFilterManager
+import com.example.shieldshare.managers.consumption.ConsumptionTracker
 import com.example.shieldshare.managers.network.IpAddressProviderImpl
 import com.example.shieldshare.managers.performance.PerformanceMonitor
 import com.example.shieldshare.managers.proxy.ProxyServer
@@ -181,8 +183,27 @@ object AppModule {
     fun provideQuotaManager(
         @ApplicationContext context: Context,
         appPrefs: AppPrefs,
+        trafficMeter: TrafficMeter,
+        consumptionTracker: ConsumptionTracker
+    ): QuotaManager {
+        val quotaManager = QuotaManager(context, appPrefs, trafficMeter, consumptionTracker)
+        // Provide callback so consumption tracker can skip blocked clients when detecting leaks
+        consumptionTracker.isClientBlocked = { clientIp -> quotaManager.isClientBlocked(clientIp) }
+        return quotaManager
+    }
+
+    @Provides
+    @Singleton
+    fun provideTrafficFilterManager(
+        appPrefs: AppPrefs
+    ): TrafficFilterManager = TrafficFilterManager(appPrefs)
+
+    @Provides
+    @Singleton
+    fun provideConsumptionTracker(
+        appPrefs: AppPrefs,
         trafficMeter: TrafficMeter
-    ): QuotaManager = QuotaManager(context, appPrefs, trafficMeter)
+    ): ConsumptionTracker = ConsumptionTracker(appPrefs, trafficMeter)
 
     @Provides
     @Singleton
@@ -192,8 +213,17 @@ object AppModule {
             vpnManager: VpnManager,
             hotspotManager: HotspotManager,
             appPrefs: AppPrefs,
-            quotaManager: QuotaManager
-    ): ProxyServer = ProxyServerImpl(context, trafficMeter, vpnManager, hotspotManager, appPrefs, quotaManager)
+            quotaManager: QuotaManager,
+            trafficFilterManager: TrafficFilterManager,
+            consumptionTracker: ConsumptionTracker
+    ): ProxyServer {
+        val proxyServer = ProxyServerImpl(context, trafficMeter, vpnManager, hotspotManager, appPrefs, quotaManager, trafficFilterManager)
+        // Setup abuse detection notification callback
+        consumptionTracker.onAbuseDetected = { clientIp, abuseRatio, globalAverage ->
+            (proxyServer as ProxyServerImpl).showAbuseDetectedNotification(clientIp, abuseRatio, globalAverage)
+        }
+        return proxyServer
+    }
 
     @Provides
     @Singleton

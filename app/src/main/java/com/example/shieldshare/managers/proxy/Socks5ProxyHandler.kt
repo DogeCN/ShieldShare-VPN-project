@@ -5,6 +5,8 @@ import com.example.shieldshare.managers.meter.TrafficMeter
 import com.example.shieldshare.managers.meter.TrafficMeterSimple
 import com.example.shieldshare.managers.quota.QuotaManager
 import com.example.shieldshare.managers.quota.QuotaStatus
+import com.example.shieldshare.managers.filter.TrafficFilterManager
+import com.example.shieldshare.managers.filter.FilterResult
 import java.io.*
 import java.net.*
 import java.util.concurrent.atomic.AtomicLong
@@ -18,6 +20,7 @@ class Socks5ProxyHandler(
         private val socketFactory: SocketFactory,
         private val inOverride: InputStream? = null,
         private val quotaManager: QuotaManager? = null,
+        private val trafficFilterManager: TrafficFilterManager? = null,
         private val trafficCallback: (bytesUp: Long, bytesDown: Long) -> Unit = { _, _ -> }
 ) : ProxyHandler(clientSocket, trafficMeter) {
     companion object {
@@ -96,6 +99,19 @@ class Socks5ProxyHandler(
                 if (targetHost == null || targetPort == -1) {
                     Log.w(TAG, "Invalid connection request")
                     return@withContext
+                }
+
+                // NEW: Optional filter check (only if manager provided AND enabled)
+                // SAFETY: Early return if disabled, zero overhead
+                trafficFilterManager?.let { filter ->
+                    if (filter.isFilteringEnabled()) {
+                        val filterResult = filter.shouldAllowConnection(targetHost, targetPort, clientIp)
+                        if (filterResult is FilterResult.BLOCK) {
+                            Log.d(TAG, "SOCKS5 connection blocked by filter: $targetHost:$targetPort (reason: ${filterResult.reason})")
+                            sendConnectionReply(output, REPLY_CONNECTION_NOT_ALLOWED)
+                            return@withContext
+                        }
+                    }
                 }
 
                 // Step 3: Establish connection to target
