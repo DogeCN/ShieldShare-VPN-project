@@ -362,18 +362,9 @@ class HttpProxyHandler(
         // Track target host for session
         hostsAccessed.add(host)
         // (trafficMeter as? TrafficMeterSimple)?.updateSessionTarget(sessionId, host) //
-        // 如果你实现了的话
 
-        // 200 Established, then raw tunnel
-        val responseStartTime = System.currentTimeMillis()
-        writer.println("$HTTP_VERSION 200 Connection Established")
-        writer.println("Proxy-Agent: ShieldShare/1.0")
-        writer.println()
-        writer.flush()
-        val responseDuration = System.currentTimeMillis() - responseStartTime
-        Log.d(TAG, "[PERF] CONNECT response sent: ${responseDuration}ms")
-
-        // Create target socket via VPN-bound factory
+        // CRITICAL FIX: Establish target connection BEFORE sending 200 OK
+        // This prevents protocol violation if connection fails
         val connectTargetStartTime = System.currentTimeMillis()
         val targetSocket = try {
             connectTarget(host, port)
@@ -385,6 +376,15 @@ class HttpProxyHandler(
         }
         val connectDuration = System.currentTimeMillis() - connectTargetStartTime
         Log.i(TAG, "[PERF] Target connected: $host:$port | Connect time: ${connectDuration}ms")
+
+        // Now that connection is established, send 200 OK response
+        val responseStartTime = System.currentTimeMillis()
+        writer.println("$HTTP_VERSION 200 Connection Established")
+        writer.println("Proxy-Agent: ShieldShare/1.0")
+        writer.println()
+        writer.flush()
+        val responseDuration = System.currentTimeMillis() - responseStartTime
+        Log.d(TAG, "[PERF] CONNECT response sent: ${responseDuration}ms")
         
         val tunnelStartTime = System.currentTimeMillis()
         // Set shorter timeout for tunneling to fail fast on stuck connections
@@ -420,6 +420,11 @@ class HttpProxyHandler(
                         val uploadThread = Thread.currentThread().name
                         Log.d(TAG, "[PERF] Starting UPLOAD tunnel for $host:$port | Thread: $uploadThread")
                         // client -> target (upload)
+                        // Note: We use raw socket.getInputStream() here because:
+                        // 1. Headers were already consumed by BufferedReader (which wrapped the same stream)
+                        // 2. After sending 200 OK, client sends TLS data which we tunnel as raw bytes
+                        // 3. BufferedReader has already consumed all headers including blank line
+                        // 4. No data loss because client waits for 200 OK before sending TLS data
                         tunnelData(
                             input = socket.getInputStream(),
                             output = targetSocket.getOutputStream(),
