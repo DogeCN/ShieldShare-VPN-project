@@ -58,7 +58,9 @@ constructor(
                             socks5Enabled = appPrefs.getBoolean("socks5_enabled", true),
                             // Quota settings (simplified)
                             quotaEnabled = appPrefs.getBoolean("quota_enabled", false),
+                            quotaMode = appPrefs.getString("quota_mode", "") ?: "",
                             quotaTotalBandwidthMb = appPrefs.getLong("quota_total_bandwidth_mb", 0),
+                            quotaFixedPerClientMb = appPrefs.getLong("quota_fixed_per_client_mb", 0),
                             quotaBlockDurationHours =
                                     appPrefs.getInt("quota_block_duration_hours", 1),
                             // Device idle timeout (default: 5 minutes)
@@ -142,7 +144,9 @@ constructor(
             // Save quota settings (simplified - only essential ones)
             appPrefs.putBoolean("quota_enabled", state.quotaEnabled)
             if (state.quotaEnabled) {
+                appPrefs.putString("quota_mode", state.quotaMode)
                 appPrefs.putLong("quota_total_bandwidth_mb", state.quotaTotalBandwidthMb)
+                appPrefs.putLong("quota_fixed_per_client_mb", state.quotaFixedPerClientMb)
                 appPrefs.putInt("quota_block_duration_hours", state.quotaBlockDurationHours)
             }
 
@@ -159,6 +163,10 @@ constructor(
         _uiState.value = _uiState.value.copy(quotaEnabled = enabled)
     }
 
+    fun updateQuotaMode(mode: String) {
+        _uiState.value = _uiState.value.copy(quotaMode = mode)
+    }
+
     fun updateQuotaSettings(totalBandwidthMb: Long, blockDurationHours: Int) {
         _uiState.value =
                 _uiState.value.copy(
@@ -166,6 +174,16 @@ constructor(
                         quotaBlockDurationHours = blockDurationHours
                 )
         // Save settings and reload quota config (which will clear blocks if duration is 0)
+        saveSettings()
+    }
+
+    fun updateFixedQuotaSettings(quotaPerClientMb: Long, blockDurationHours: Int) {
+        _uiState.value =
+                _uiState.value.copy(
+                        quotaFixedPerClientMb = quotaPerClientMb,
+                        quotaBlockDurationHours = blockDurationHours
+                )
+        // Save settings and reload quota config
         saveSettings()
     }
 
@@ -281,7 +299,9 @@ data class SettingsUiState(
         val clearDatabaseError: String? = null,
         // Quota settings (simplified - only essential)
         val quotaEnabled: Boolean = false,
+        val quotaMode: String = "", // "dynamic" or "fixed" (empty = not selected yet)
         val quotaTotalBandwidthMb: Long = 0,
+        val quotaFixedPerClientMb: Long = 0,
         val quotaBlockDurationHours: Int = 1,
         // Device idle timeout (minutes) - devices inactive longer than this are removed from real-time display
         val deviceIdleTimeoutMinutes: Int = 5

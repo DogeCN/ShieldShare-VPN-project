@@ -1,6 +1,7 @@
 package com.example.shieldshare.ui.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -31,12 +32,17 @@ fun SettingsScreen(
         val snackbarHostState = remember { SnackbarHostState() }
         var showClearConfirmationDialog by remember { mutableStateOf(false) }
         var showQuotaConfigDialog by remember { mutableStateOf(false) }
+        var showFixedQuotaConfigDialog by remember { mutableStateOf(false) }
 
         // Local state for quota dialog
         var quotaBandwidthText by remember { mutableStateOf("") }
         var quotaBlockHoursText by remember {
                 mutableStateOf(uiState.quotaBlockDurationHours.toString())
         }
+        
+        // Local state for fixed quota dialog
+        var fixedQuotaPerClientText by remember { mutableStateOf("") }
+        var fixedQuotaBlockHoursText by remember { mutableStateOf("1") }
 
         // Auto-detect bandwidth when dialog opens (if not already set)
         LaunchedEffect(showQuotaConfigDialog) {
@@ -430,52 +436,90 @@ fun SettingsScreen(
                                                         )
                                                 }
 
-                                                // Configure button (only show when enabled)
+                                                // Quota Mode Selection (only show when enabled)
                                                 if (uiState.quotaEnabled) {
+                                                        Divider()
+                                                        
                                                         Row(
                                                                 modifier = Modifier.fillMaxWidth(),
-                                                                horizontalArrangement =
-                                                                        Arrangement.spacedBy(8.dp)
+                                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                                verticalAlignment = Alignment.CenterVertically
                                                         ) {
-                                                                Button(
-                                                                        onClick = {
-                                                                                showQuotaConfigDialog =
-                                                                                        true
-                                                                        },
-                                                                        modifier =
-                                                                                Modifier.weight(1f),
-                                                                        shape =
-                                                                                RoundedCornerShape(
-                                                                                        8.dp
+                                                                // Left side: Quota Mode radio buttons
+                                                                Column(modifier = Modifier.weight(1f)) {
+                                                                        Text(
+                                                                                text = "Quota Mode:",
+                                                                                style = MaterialTheme.typography.labelMedium,
+                                                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                                        )
+                                                                        
+                                                                        Spacer(modifier = Modifier.height(8.dp))
+                                                                        
+                                                                        // Dynamic mode radio button
+                                                                        Row(
+                                                                                modifier = Modifier
+                                                                                        .fillMaxWidth()
+                                                                                        .clickable {
+                                                                                                viewModel.updateQuotaMode("dynamic")
+                                                                                                showQuotaConfigDialog = true
+                                                                                        }
+                                                                                        .padding(vertical = 4.dp),
+                                                                                verticalAlignment = Alignment.CenterVertically
+                                                                        ) {
+                                                                                RadioButton(
+                                                                                        selected = uiState.quotaMode == "dynamic",
+                                                                                        onClick = {
+                                                                                                viewModel.updateQuotaMode("dynamic")
+                                                                                                showQuotaConfigDialog = true
+                                                                                        }
                                                                                 )
-                                                                ) { Text("Configure Quota") }
-
-                                                                // Advanced button (red background)
+                                                                                Text(
+                                                                                        text = "Dynamic (divide total equally)",
+                                                                                        style = MaterialTheme.typography.bodySmall,
+                                                                                        modifier = Modifier.padding(start = 8.dp)
+                                                                                )
+                                                                        }
+                                                                        
+                                                                        // Fixed mode radio button
+                                                                        Row(
+                                                                                modifier = Modifier
+                                                                                        .fillMaxWidth()
+                                                                                        .clickable {
+                                                                                                viewModel.updateQuotaMode("fixed")
+                                                                                                showFixedQuotaConfigDialog = true
+                                                                                        }
+                                                                                        .padding(vertical = 4.dp),
+                                                                                verticalAlignment = Alignment.CenterVertically
+                                                                        ) {
+                                                                                RadioButton(
+                                                                                        selected = uiState.quotaMode == "fixed",
+                                                                                        onClick = {
+                                                                                                viewModel.updateQuotaMode("fixed")
+                                                                                                showFixedQuotaConfigDialog = true
+                                                                                        }
+                                                                                )
+                                                                                Text(
+                                                                                        text = "Fixed per client",
+                                                                                        style = MaterialTheme.typography.bodySmall,
+                                                                                        modifier = Modifier.padding(start = 8.dp)
+                                                                                )
+                                                                        }
+                                                                }
+                                                                
+                                                                // Right side: Advanced button (red background)
                                                                 Button(
                                                                         onClick = {
-                                                                                navController
-                                                                                        ?.navigate(
-                                                                                                "advanced-traffic-regulation"
-                                                                                        )
+                                                                                navController?.navigate("advanced-traffic-regulation")
                                                                         },
-                                                                        modifier =
-                                                                                Modifier.weight(1f),
-                                                                        shape =
-                                                                                RoundedCornerShape(
-                                                                                        8.dp
-                                                                                ),
-                                                                        colors =
-                                                                                ButtonDefaults
-                                                                                        .buttonColors(
-                                                                                                containerColor =
-                                                                                                        MaterialTheme
-                                                                                                                .colorScheme
-                                                                                                                .error
-                                                                                        ),
-                                                                        enabled =
-                                                                                navController !=
-                                                                                        null
-                                                                ) { Text("Advanced") }
+                                                                        shape = RoundedCornerShape(8.dp),
+                                                                        colors = ButtonDefaults.buttonColors(
+                                                                                containerColor = MaterialTheme.colorScheme.error
+                                                                        ),
+                                                                        enabled = navController != null,
+                                                                        modifier = Modifier.padding(start = 8.dp)
+                                                                ) {
+                                                                        Text("Advanced")
+                                                                }
                                                         }
                                                 }
                                         }
@@ -717,6 +761,92 @@ fun SettingsScreen(
                         },
                         dismissButton = {
                                 TextButton(onClick = { showQuotaConfigDialog = false }) {
+                                        Text("Cancel")
+                                }
+                        },
+                        containerColor = MaterialTheme.colorScheme.surface
+                )
+        }
+
+        // Fixed Quota Configuration Dialog
+        if (showFixedQuotaConfigDialog) {
+                AlertDialog(
+                        onDismissRequest = { showFixedQuotaConfigDialog = false },
+                        title = {
+                                Text(
+                                        text = "Configure Fixed Quota",
+                                        style = MaterialTheme.typography.titleLarge,
+                                        fontWeight = FontWeight.Bold
+                                )
+                        },
+                        text = {
+                                Column(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                                ) {
+                                        Text(
+                                                text =
+                                                        "Each client gets a fixed quota regardless of how many connect.",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+
+                                        OutlinedTextField(
+                                                value = fixedQuotaPerClientText,
+                                                onValueChange = { fixedQuotaPerClientText = it },
+                                                label = { Text("Quota per Client (MB)") },
+                                                placeholder = { Text("e.g., 500") },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                supportingText = {
+                                                        Text(
+                                                                "Each client will receive exactly this amount"
+                                                        )
+                                                },
+                                                singleLine = true
+                                        )
+
+                                        OutlinedTextField(
+                                                value = fixedQuotaBlockHoursText,
+                                                onValueChange = { fixedQuotaBlockHoursText = it },
+                                                label = { Text("Block Duration (Hours)") },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                supportingText = {
+                                                        Text(
+                                                                "How long to block clients after quota exceeded (0 = no blocking, 1-168 hours)"
+                                                        )
+                                                },
+                                                singleLine = true
+                                        )
+                                }
+                        },
+                        confirmButton = {
+                                Button(
+                                        onClick = {
+                                                val quotaPerClient =
+                                                        fixedQuotaPerClientText.toLongOrNull() ?: 0
+                                                val blockHours =
+                                                        fixedQuotaBlockHoursText.toIntOrNull() ?: 1
+                                                if (quotaPerClient > 0 &&
+                                                                blockHours >= 0 &&
+                                                                blockHours <= 168
+                                                ) {
+                                                        viewModel.updateFixedQuotaSettings(
+                                                                quotaPerClient,
+                                                                blockHours
+                                                        )
+                                                        showFixedQuotaConfigDialog = false
+                                                }
+                                        },
+                                        enabled =
+                                                fixedQuotaPerClientText.toLongOrNull()?.let { it > 0 } ==
+                                                        true &&
+                                                        fixedQuotaBlockHoursText.toIntOrNull()?.let {
+                                                                it in 0..168
+                                                        } == true
+                                ) { Text("Save") }
+                        },
+                        dismissButton = {
+                                TextButton(onClick = { showFixedQuotaConfigDialog = false }) {
                                         Text("Cancel")
                                 }
                         },
