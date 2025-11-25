@@ -71,6 +71,11 @@ class QuotaManager @Inject constructor(
         if (config.blockDurationMs == 0L && previousBlockDuration != 0L) {
             clearAllBlocks()
         }
+        
+        // Recalculate quotas for existing clients if quota is enabled
+        if (config.enabled) {
+            recalculateQuotas()
+        }
     }
     
     /**
