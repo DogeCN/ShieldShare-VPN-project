@@ -515,6 +515,57 @@ fun SettingsScreen(
                                                                         .onSurfaceVariant
                                                 )
 
+                                                // Device Idle Timeout Setting
+                                                Divider(modifier = Modifier.padding(vertical = 8.dp))
+                                                
+                                                Text(
+                                                        text = "Device Idle Timeout",
+                                                        style =
+                                                                MaterialTheme.typography
+                                                                        .bodyMedium,
+                                                        fontWeight = FontWeight.Medium
+                                                )
+                                                
+                                                Text(
+                                                        text =
+                                                                "Devices inactive longer than this duration will be removed from real-time monitoring. Historical data remains in storage.",
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color =
+                                                                MaterialTheme.colorScheme
+                                                                        .onSurfaceVariant
+                                                )
+                                                
+                                                Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement =
+                                                                Arrangement.spacedBy(12.dp),
+                                                        verticalAlignment =
+                                                                Alignment.CenterVertically
+                                                ) {
+                                                        Slider(
+                                                                value = uiState.deviceIdleTimeoutMinutes.toFloat(),
+                                                                onValueChange = { value ->
+                                                                        viewModel
+                                                                                .updateDeviceIdleTimeoutMinutes(
+                                                                                        value.toInt()
+                                                                                )
+                                                                },
+                                                                valueRange = 1f..60f,
+                                                                steps = 58, // 1-minute steps from 1 to 60
+                                                                modifier = Modifier.weight(1f)
+                                                        )
+                                                        Text(
+                                                                text =
+                                                                        "${uiState.deviceIdleTimeoutMinutes} min",
+                                                                style =
+                                                                        MaterialTheme.typography
+                                                                                .bodyMedium,
+                                                                modifier =
+                                                                        Modifier.width(60.dp),
+                                                                fontWeight = FontWeight.Medium
+                                                        )
+                                                }
+
                                                 Button(
                                                         onClick = {
                                                                 showClearConfirmationDialog = true

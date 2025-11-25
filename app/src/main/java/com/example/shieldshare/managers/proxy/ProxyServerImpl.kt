@@ -1068,13 +1068,23 @@ function isLocalNetwork(host) {
                 try {
                     val currentTime = System.currentTimeMillis()
                     val iterator = connectedClients.iterator()
+                    var removedClients = mutableListOf<String>()
 
                     while (iterator.hasNext()) {
                         val (ip, timestamp) = iterator.next()
                         if (currentTime - timestamp > CLIENT_TIMEOUT_MS) {
                             iterator.remove()
+                            removedClients.add(ip)
                             Log.d(TAG, "Removed stale client IP: $ip")
                         }
+                    }
+
+                    // Recalculate quotas if any clients were removed
+                    if (removedClients.isNotEmpty()) {
+                        val hostIp = hotspotManager.getHotspotIpAddress()
+                        val connectedClientList = connectedClients.keys.toList()
+                        quotaManager.initializeQuotas(connectedClientList, hostIp)
+                        Log.i(TAG, "Quotas recalculated after cleanup: removed ${removedClients.size} stale client(s), ${connectedClientList.size} clients remaining")
                     }
 
                     delay(30_000) // Clean up every 30 seconds
@@ -1352,15 +1362,40 @@ function isLocalNetwork(host) {
     
     /**
      * Remove handler and update per-client counter atomically
+     * Also checks if client should be removed from connectedClients and quotas recalculated
      */
     private fun removeHandler(clientId: String, clientAddressStr: String) {
         val removed = proxyHandlers.remove(clientId)
         handlerTimestamps.remove(clientId)
         if (removed != null) {
             // Decrement per-client counter atomically
+            val hadHandlers = handlersPerClient.containsKey(clientAddressStr)
             handlersPerClient.compute(clientAddressStr) { _, count ->
                 val newCount = (count ?: 1) - 1
                 if (newCount <= 0) null else newCount // Remove entry if count reaches 0
+            }
+            
+            // Check if client now has no handlers and should be removed from connectedClients
+            val hasNoHandlers = !handlersPerClient.containsKey(clientAddressStr)
+            if (hadHandlers && hasNoHandlers) {
+                // Client had handlers before, but now has none - check if we should remove from connectedClients
+                // Only remove if they've been inactive for a reasonable time (30 seconds) to avoid removing active clients
+                val clientTimestamp = connectedClients[clientAddressStr]
+                if (clientTimestamp != null) {
+                    val timeSinceLastConnection = System.currentTimeMillis() - clientTimestamp
+                    if (timeSinceLastConnection > 30_000) { // 30 seconds grace period
+                        connectedClients.remove(clientAddressStr)
+                        Log.d(TAG, "Client $clientAddressStr removed from connectedClients (no active handlers for ${timeSinceLastConnection / 1000}s)")
+                        
+                        // Recalculate quotas immediately when client disconnects (launch in coroutine to avoid blocking)
+                        serviceScope.launch {
+                            val hostIp = hotspotManager.getHotspotIpAddress()
+                            val connectedClientList = connectedClients.keys.toList()
+                            quotaManager.initializeQuotas(connectedClientList, hostIp)
+                            Log.i(TAG, "Quotas recalculated after client disconnect: ${connectedClientList.size} clients remaining")
+                        }
+                    }
+                }
             }
         }
     }

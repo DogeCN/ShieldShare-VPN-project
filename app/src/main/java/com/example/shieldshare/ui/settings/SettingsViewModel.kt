@@ -60,7 +60,9 @@ constructor(
                             quotaEnabled = appPrefs.getBoolean("quota_enabled", false),
                             quotaTotalBandwidthMb = appPrefs.getLong("quota_total_bandwidth_mb", 0),
                             quotaBlockDurationHours =
-                                    appPrefs.getInt("quota_block_duration_hours", 1)
+                                    appPrefs.getInt("quota_block_duration_hours", 1),
+                            // Device idle timeout (default: 5 minutes)
+                            deviceIdleTimeoutMinutes = appPrefs.getInt("device_idle_timeout_minutes", 5)
                     )
         }
     }
@@ -144,6 +146,9 @@ constructor(
                 appPrefs.putInt("quota_block_duration_hours", state.quotaBlockDurationHours)
             }
 
+            // Save device idle timeout
+            appPrefs.putInt("device_idle_timeout_minutes", state.deviceIdleTimeoutMinutes)
+
             // Reload quota configuration
             quotaManager.loadConfig()
         }
@@ -162,6 +167,12 @@ constructor(
                 )
         // Save settings and reload quota config (which will clear blocks if duration is 0)
         saveSettings()
+    }
+
+    fun updateDeviceIdleTimeoutMinutes(minutes: Int) {
+        _uiState.value = _uiState.value.copy(deviceIdleTimeoutMinutes = minutes)
+        // Auto-save immediately for instant feedback
+        appPrefs.putInt("device_idle_timeout_minutes", minutes)
     }
 
     /**
@@ -271,5 +282,7 @@ data class SettingsUiState(
         // Quota settings (simplified - only essential)
         val quotaEnabled: Boolean = false,
         val quotaTotalBandwidthMb: Long = 0,
-        val quotaBlockDurationHours: Int = 1
+        val quotaBlockDurationHours: Int = 1,
+        // Device idle timeout (minutes) - devices inactive longer than this are removed from real-time display
+        val deviceIdleTimeoutMinutes: Int = 5
 )
