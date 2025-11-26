@@ -808,6 +808,10 @@ class ProxyServerImpl(
                 response.append(
                         "Content-Type: application/x-ns-proxy-autoconfig; charset=UTF-8\r\n"
                 )
+                // Prevent caching to ensure PAC file changes take effect immediately
+                response.append("Cache-Control: no-cache, no-store, must-revalidate\r\n")
+                response.append("Pragma: no-cache\r\n")
+                response.append("Expires: 0\r\n")
                 if (isDownload) {
                     response.append("Content-Disposition: attachment; filename=\"proxy.pac\"\r\n")
                 }

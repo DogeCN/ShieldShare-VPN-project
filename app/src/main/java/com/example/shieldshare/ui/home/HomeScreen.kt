@@ -165,16 +165,19 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
                                                 icon = Icons.Default.Wifi,
                                                 title = "Proxy Server",
                                                 subtitle =
-                                                        if (!uiState.isHotspotEnabled)
-                                                                "Hotspot required"
-                                                        else if (uiState.isProxyRunning) {
+                                                        when {
+                                                            uiState.isProxyRunning -> {
                                                                 when (uiState.proxyType) {
                                                                     ProxyType.HTTP_HTTPS -> "HTTP/HTTPS ${uiState.httpPort}"
                                                                     ProxyType.SOCKS5 -> "SOCKS5 ${uiState.socks5Port}"
                                                                     ProxyType.BOTH -> "HTTP/HTTPS ${uiState.httpPort} · SOCKS5 ${uiState.socks5Port}"
                                                                 }
-                                                        } else "Not running",
-                                                isDisabled = !uiState.isHotspotEnabled,
+                                                            }
+                                                            uiState.isOnWifiAp -> "Ready (WiFi AP)"
+                                                            !uiState.isHotspotEnabled -> "Hotspot required"
+                                                            else -> "Not running"
+                                                        },
+                                                isDisabled = !uiState.isHotspotEnabled && !uiState.isOnWifiAp,
                                                 onQrClick = { showQrDialog = true }
                                         )
 
@@ -193,9 +196,11 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
                                                 icon = Icons.Default.WifiTethering,
                                                 title = "Hotspot",
                                                 subtitle =
-                                                        if (uiState.isHotspotEnabled)
-                                                                "${uiState.hotspotClients} clients"
-                                                        else "Not configured",
+                                                        when {
+                                                            uiState.isHotspotEnabled -> "${uiState.hotspotClients} clients"
+                                                            uiState.isOnWifiAp -> "Not required"
+                                                            else -> "Not configured"
+                                                        },
                                                 isActive = uiState.isHotspotEnabled,
                                                 onStart = { viewModel.openHotspotSettings() },
                                                 onStop = { viewModel.openHotspotSettings() }
@@ -756,7 +761,7 @@ fun ProxyStatusCard(
                                                 imageVector = Icons.Default.QrCode,
                                                 contentDescription =
                                                         if (isDisabled)
-                                                                "QR Code disabled - Hotspot required"
+                                                                "QR Code disabled - Network required"
                                                         else "Show QR Code",
                                                 tint =
                                                         if (isDisabled)

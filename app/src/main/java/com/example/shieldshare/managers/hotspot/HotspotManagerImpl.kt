@@ -238,6 +238,41 @@ class HotspotManagerImpl(private val context: Context) : HotspotManager {
         }
     }
 
+    /**
+     * Check if device is on cellular network (not WiFi).
+     * Returns true if cellular is the active transport and WiFi is not connected.
+     */
+    override fun isOnCellular(): Boolean {
+        return try {
+            val connectivityManager =
+                    context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val activeNetwork = connectivityManager.activeNetwork
+            if (activeNetwork != null) {
+                val networkCapabilities =
+                        connectivityManager.getNetworkCapabilities(activeNetwork)
+                if (networkCapabilities != null) {
+                    // Check if cellular is connected
+                    val isCellularConnected =
+                            networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+                    // Check if WiFi is NOT connected
+                    val isWifiConnected =
+                            networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                    // Device is on cellular if cellular is connected but WiFi is not
+                    val result = isCellularConnected && !isWifiConnected
+                    Log.d(
+                            TAG,
+                            "Cellular check: Cellular connected=$isCellularConnected, WiFi connected=$isWifiConnected, On Cellular=$result"
+                    )
+                    return result
+                }
+            }
+            false
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking cellular connection", e)
+            false
+        }
+    }
+
     fun getHotspotInfo(): HotspotInfo? {
         return try {
             if (isTetheringEnabled()) {

@@ -14,6 +14,12 @@ interface HotspotManager {
      * Returns true if WiFi is connected but hotspot is not enabled.
      */
     fun isConnectedToWifiAp(): Boolean
+    
+    /**
+     * Check if device is on cellular network (not WiFi).
+     * Returns true if cellular is the active transport and WiFi is not connected.
+     */
+    fun isOnCellular(): Boolean
 }
 
 data class ConnectedClient(
