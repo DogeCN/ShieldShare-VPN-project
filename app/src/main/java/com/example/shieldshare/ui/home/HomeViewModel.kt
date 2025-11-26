@@ -461,10 +461,14 @@ constructor(
                             "Hotspot state: $hotspotState, enabled: $isEnabled, clients: $clientCount (from proxy server)"
                     )
 
+                    // SMART MODE: Check if on WiFi AP
+                    val isOnWifiAp = hotspotManager.isConnectedToWifiAp()
+                    
                     val wasProxyRunning = _uiState.value.isProxyRunning
                     _uiState.value =
                             _uiState.value.copy(
                                     isHotspotEnabled = isEnabled,
+                                    isOnWifiAp = isOnWifiAp,
                                     hotspotClients = clientCount,
                                     activeConnections = clientCount, // Update active connections too
                                     isProxyRunning = proxyInfo.isRunning,
@@ -481,15 +485,21 @@ constructor(
                         updateServiceSessionState()
                     }
 
-                    // Auto-manage proxy based on hotspot state
+                    // SMART MODE: Auto-manage proxy based on hotspot OR WiFi AP connection
+                    // Proxy should run if:
+                    // 1. Hotspot is enabled (current behavior), OR
+                    // 2. Device is connected to WiFi AP (new behavior - allows clients on same AP to connect)
+                    val shouldProxyRun = isEnabled || isOnWifiAp
+                    
                     val currentState = _uiState.value
-                    if (isEnabled && !currentState.isProxyRunning) {
-                        // Hotspot is on but proxy is off - start proxy
-                        Log.d("HomeViewModel", "Hotspot enabled, starting proxy automatically")
+                    if (shouldProxyRun && !currentState.isProxyRunning) {
+                        // Network available (hotspot or WiFi AP) but proxy is off - start proxy
+                        val mode = if (isEnabled) "hotspot" else "WiFi AP"
+                        Log.d("HomeViewModel", "Network available ($mode), starting proxy automatically")
                         startProxyServer()
-                    } else if (!isEnabled && currentState.isProxyRunning) {
-                        // Hotspot is off but proxy is on - stop proxy
-                        Log.d("HomeViewModel", "Hotspot disabled, stopping proxy automatically")
+                    } else if (!shouldProxyRun && currentState.isProxyRunning) {
+                        // No network available (neither hotspot nor WiFi AP) but proxy is on - stop proxy
+                        Log.d("HomeViewModel", "No network available, stopping proxy automatically")
                         stopProxyServer()
                     }
                 } catch (e: Exception) {
@@ -615,6 +625,7 @@ data class HomeUiState(
         val downloadSpeed: String = "0 KB/s",
         val serviceSessionUptime: Long? = null, // Uptime in milliseconds, null if session not active
         val isHotspotEnabled: Boolean = false,
+        val isOnWifiAp: Boolean = false, // True if connected to WiFi AP (not hotspot)
         val hotspotClients: Int = 0,
         val localIpAddress: String? = null,
         val publicIpAddress: String? = null,

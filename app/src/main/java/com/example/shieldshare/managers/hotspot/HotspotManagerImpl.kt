@@ -203,6 +203,41 @@ class HotspotManagerImpl(private val context: Context) : HotspotManager {
         }
     }
 
+    /**
+     * Check if device is connected to a WiFi Access Point (not hotspot).
+     * Returns true if WiFi is connected but hotspot is not enabled.
+     * This means the device is connected to an external WiFi network, not acting as hotspot.
+     */
+    override fun isConnectedToWifiAp(): Boolean {
+        return try {
+            val connectivityManager =
+                    context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val activeNetwork = connectivityManager.activeNetwork
+            if (activeNetwork != null) {
+                val networkCapabilities =
+                        connectivityManager.getNetworkCapabilities(activeNetwork)
+                if (networkCapabilities != null) {
+                    // Check if WiFi is connected
+                    val isWifiConnected =
+                            networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                    // Check if hotspot is NOT enabled
+                    val isHotspotEnabled = isTetheringEnabled()
+                    // Device is on WiFi AP if WiFi is connected but hotspot is not enabled
+                    val result = isWifiConnected && !isHotspotEnabled
+                    Log.d(
+                            TAG,
+                            "WiFi AP check: WiFi connected=$isWifiConnected, Hotspot enabled=$isHotspotEnabled, On WiFi AP=$result"
+                    )
+                    return result
+                }
+            }
+            false
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking WiFi AP connection", e)
+            false
+        }
+    }
+
     fun getHotspotInfo(): HotspotInfo? {
         return try {
             if (isTetheringEnabled()) {
@@ -520,18 +555,14 @@ class HotspotManagerImpl(private val context: Context) : HotspotManager {
 
     override fun getHotspotIpAddress(): String? {
         return try {
-            // First, check if hotspot is enabled
-            if (!isTetheringEnabled()) {
-                Log.d(TAG, "Hotspot not enabled, using default IP")
-                return HOTSPOT_IP
-            }
-
+            val isHotspotEnabled = isTetheringEnabled()
+            
             // Get the local IP address of the device
             val wifiInfo = wifiManager.connectionInfo
             val dhcpInfo = wifiManager.dhcpInfo
 
             // Check if hotspot is enabled by looking at the DHCP info
-            if (dhcpInfo != null) {
+            if (dhcpInfo != null && isHotspotEnabled) {
                 // Convert int IP to string
                 val ipAddress =
                         String.format(
@@ -549,8 +580,9 @@ class HotspotManagerImpl(private val context: Context) : HotspotManager {
                 }
             }
 
-            // Fallback: try to get the local IP from network interfaces
-            // Prioritize hotspot IP over VPN IP
+            // Scan network interfaces to find the appropriate IP
+            // This works for both hotspot mode AND WiFi AP mode
+            // Prioritize hotspot IP > WiFi AP IP > VPN IP
             val networkInterfaces = java.net.NetworkInterface.getNetworkInterfaces()
             val hotspotCandidates = mutableListOf<String>()
             val wifiCandidates = mutableListOf<String>()
@@ -613,12 +645,18 @@ class HotspotManagerImpl(private val context: Context) : HotspotManager {
                 return selectedIp
             } else if (wifiCandidates.isNotEmpty()) {
                 val selectedIp = wifiCandidates.first()
-                Log.d(TAG, "Using WiFi IP: $selectedIp")
+                Log.d(TAG, "Using WiFi AP IP: $selectedIp (hotspot not enabled, but on WiFi AP)")
                 return selectedIp
             } else if (vpnCandidates.isNotEmpty()) {
                 val selectedIp = vpnCandidates.first()
                 Log.d(TAG, "Using VPN IP: $selectedIp")
                 return selectedIp
+            }
+
+            // Fallback: if hotspot is enabled but no interface found, use default
+            if (isHotspotEnabled) {
+                Log.d(TAG, "Hotspot enabled but no IP found, using default IP")
+                return HOTSPOT_IP
             }
 
             // No local network IP found

@@ -9,6 +9,11 @@ interface HotspotManager {
     fun getHotspotClients(): List<ConnectedClient>
     fun subscribeToClientChanges(): Flow<List<ConnectedClient>>
     fun getHotspotIpAddress(): String?
+    /**
+     * Check if device is connected to a WiFi Access Point (not hotspot).
+     * Returns true if WiFi is connected but hotspot is not enabled.
+     */
+    fun isConnectedToWifiAp(): Boolean
 }
 
 data class ConnectedClient(
