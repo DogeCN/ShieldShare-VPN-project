@@ -134,28 +134,37 @@ class HttpProxyHandler(
                         // Reset timeout for next request processing
                         socket.soTimeout = 30000
                         
-                        if (requestResult == RequestResult.CONNECT) {
-                            // CONNECT request - connection is now dedicated to tunneling
-                            // Don't try to process more requests - the tunnel will handle it
-                            isConnectRequest = true
-                            shouldCloseConnection = true
-                            Log.d(TAG, "CONNECT request processed, connection dedicated to tunnel")
-                            // Note: handleConnectRequest will keep the connection open for tunneling
-                            // We break here so we don't try to process more requests
-                            break
-                        } else if (requestResult == RequestResult.CLOSE) {
-                            // Request indicated connection should close
-                            shouldCloseConnection = true
-                            Log.d(TAG, "Request indicated connection should close")
-                        } else if (requestResult == RequestResult.ERROR) {
-                            // Error occurred, close connection
-                            shouldCloseConnection = true
-                            Log.d(TAG, "Error processing request, closing connection")
+                        when (requestResult) {
+                            RequestResult.CONNECT -> {
+                                // CONNECT request - connection is now dedicated to tunneling
+                                // Don't try to process more requests - the tunnel will handle it
+                                isConnectRequest = true
+                                shouldCloseConnection = true
+                                Log.d(TAG, "CONNECT request processed, connection dedicated to tunnel")
+                                // Note: handleConnectRequest will keep the connection open for tunneling
+                                // We break here so we don't try to process more requests
+                                break
+                            }
+                            RequestResult.CLOSE -> {
+                                // Request indicated connection should close
+                                shouldCloseConnection = true
+                                Log.d(TAG, "Request indicated connection should close")
+                            }
+                            RequestResult.ERROR -> {
+                                // Error occurred, close connection
+                                shouldCloseConnection = true
+                                Log.d(TAG, "Error processing request, closing connection")
+                            }
+                            RequestResult.AUTH_REQUIRED -> {
+                                // Client needs to resend request with credentials - keep connection open
+                                Log.d(TAG, "Proxy auth required for $clientIp, waiting for next request")
+                                continue
+                            }
+                            RequestResult.SUCCESS -> {
+                                // Request processed successfully, keep-alive connection if allowed
+                                requestCount++
+                            }
                         }
-                        // If SUCCESS, we continue the loop to process more requests
-                        
-                        requestCount++
-                        
                     } catch (e: java.net.SocketTimeoutException) {
                         if (requestCount == 0) {
                             // Timeout on first request - no data received, close connection
@@ -200,10 +209,11 @@ class HttpProxyHandler(
 
     // Enum to indicate request processing result
     private enum class RequestResult {
-        SUCCESS,      // Request processed successfully, connection can stay open
-        CONNECT,      // CONNECT request - connection dedicated to tunnel
-        CLOSE,        // Connection should close
-        ERROR         // Error occurred
+        SUCCESS,        // Request processed successfully, connection can stay open
+        CONNECT,        // CONNECT request - connection dedicated to tunnel
+        CLOSE,          // Connection should close
+        ERROR,          // Error occurred
+        AUTH_REQUIRED   // Proxy auth challenge issued, keep connection open for retry
     }
     
     private suspend fun handleRequest() = withContext(Dispatchers.IO) {
@@ -245,7 +255,7 @@ class HttpProxyHandler(
         val headers = readHeaders(reader)
 
         if (!validateProxyAuthentication(headers, writer)) {
-            return@withContext RequestResult.CLOSE
+            return@withContext RequestResult.AUTH_REQUIRED
         }
 
         if (method.equals(CONNECT_METHOD, ignoreCase = true)) {
@@ -897,6 +907,8 @@ class HttpProxyHandler(
         writer.println("$HTTP_VERSION 407 Proxy Authentication Required")
         writer.println("Proxy-Agent: ShieldShare/1.0")
         writer.println("Proxy-Authenticate: Basic realm=\"ShieldShare Proxy\"")
+        writer.println("Proxy-Connection: keep-alive")
+        writer.println("Connection: keep-alive")
         writer.println("Content-Type: text/plain")
         writer.println("Content-Length: ${message.length}")
         writer.println("Connection: close")
