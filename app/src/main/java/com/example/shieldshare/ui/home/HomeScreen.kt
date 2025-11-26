@@ -137,6 +137,7 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
                                 // VPN Status Card
                                 VpnStatusCard(
                                         isConnected = uiState.isVpnConnected,
+                                        isOnWifiAp = uiState.isOnWifiAp,
                                         onClick = {
                                                 scope.launch {
                                                         viewModel.startVpn()
@@ -173,11 +174,9 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
                                                                     ProxyType.BOTH -> "HTTP/HTTPS ${uiState.httpPort} · SOCKS5 ${uiState.socks5Port}"
                                                                 }
                                                             }
-                                                            uiState.isOnWifiAp -> "Ready (WiFi AP)"
-                                                            !uiState.isHotspotEnabled -> "Hotspot required"
                                                             else -> "Not running"
                                                         },
-                                                isDisabled = !uiState.isHotspotEnabled && !uiState.isOnWifiAp,
+                                                isDisabled = !uiState.isProxyRunning,
                                                 onQrClick = { showQrDialog = true }
                                         )
 
@@ -212,7 +211,7 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
 }
 
 @Composable
-fun VpnStatusCard(isConnected: Boolean, onClick: () -> Unit) {
+fun VpnStatusCard(isConnected: Boolean, isOnWifiAp: Boolean = false, onClick: () -> Unit) {
         Card(
                 modifier = Modifier.fillMaxWidth().height(210.dp),
                 colors =
@@ -252,10 +251,11 @@ fun VpnStatusCard(isConnected: Boolean, onClick: () -> Unit) {
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
                                         text =
-                                                if (isConnected)
-                                                        "Your connection is secured"
-                                                else
-                                                        "Connect a VPN to get started",
+                                                when {
+                                                        isConnected -> "Your connection is secured"
+                                                        isOnWifiAp -> "Enable VPN to get started"
+                                                        else -> "Enable VPN and Hotspot to get started"
+                                                },
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         textAlign = TextAlign.Center
