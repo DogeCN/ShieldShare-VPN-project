@@ -25,7 +25,8 @@ import javax.inject.Singleton
 @Singleton
 class TrafficMeterSimple @Inject constructor(
     private val context: Context,
-    private val trafficRepository: TrafficRepository
+    private val trafficRepository: TrafficRepository,
+    private val appPrefs: com.example.shieldshare.data.prefs.AppPrefs
 ) : TrafficMeter {
     
     companion object {
@@ -51,6 +52,7 @@ class TrafficMeterSimple @Inject constructor(
     init {
         Log.i(TAG, "STAGE 2: Traffic Metering Implementation Started")
         startPeriodicLogging()
+        startPeriodicCleanup()
     }
     
     /**
@@ -218,9 +220,18 @@ class TrafficMeterSimple @Inject constructor(
     
     /**
      * GET CURRENT STATS for UI display
+     * Returns only active devices (those seen within the idle timeout period)
+     * Inactive devices are removed from real-time display but remain in persistent storage
      */
     override fun getCurrentStats(): List<ClientTrafficStats> {
-        return clientStats.values.toList()
+        val timeoutMinutes = appPrefs.getInt("device_idle_timeout_minutes", 5)
+        val timeoutMs = timeoutMinutes * 60_000L
+        val currentTime = System.currentTimeMillis()
+        
+        // Filter out devices that haven't been seen within the timeout period
+        return clientStats.values.filter { stats ->
+            (currentTime - stats.lastSeen) <= timeoutMs
+        }
     }
     
     /**
@@ -334,6 +345,47 @@ class TrafficMeterSimple @Inject constructor(
         }
     }
     
+    /**
+     * Periodic cleanup: Remove inactive devices from real-time display
+     * Devices are removed from in-memory clientStats but remain in persistent storage
+     * This keeps the real-time monitor clean while preserving historical data
+     */
+    private fun startPeriodicCleanup() {
+        scope.launch {
+            while (true) {
+                try {
+                    delay(CLEANUP_INTERVAL_MS) // Run every minute
+                    
+                    val timeoutMinutes = appPrefs.getInt("device_idle_timeout_minutes", 5)
+                    val timeoutMs = timeoutMinutes * 60_000L
+                    val currentTime = System.currentTimeMillis()
+                    
+                    val iterator = clientStats.iterator()
+                    var removedCount = 0
+                    
+                    while (iterator.hasNext()) {
+                        val (ip, stats) = iterator.next()
+                        val timeSinceLastSeen = currentTime - stats.lastSeen
+                        
+                        if (timeSinceLastSeen > timeoutMs) {
+                            iterator.remove()
+                            removedCount++
+                            Log.d(TAG, "Removed inactive device from real-time display: $ip (idle for ${timeSinceLastSeen / 1000}s, timeout: ${timeoutMs / 1000}s)")
+                            addRawLog("Removed inactive device: $ip (idle ${timeSinceLastSeen / 1000}s)")
+                        }
+                    }
+                    
+                    if (removedCount > 0) {
+                        Log.i(TAG, "Cleaned up $removedCount inactive device(s) from real-time display (timeout: ${timeoutMinutes} minutes)")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error in periodic cleanup", e)
+                    delay(60_000) // Wait longer on error
+                }
+            }
+        }
+    }
+
     /**
      * Periodic logging for monitoring
      * Also flushes any pending traffic records to database periodically

@@ -49,6 +49,8 @@ constructor(
             _uiState.value =
                     SettingsUiState(
                             authEnabled = appPrefs.getBoolean("auth_enabled", false),
+                            authUsername = appPrefs.getString("proxy_username", "") ?: "",
+                            authPassword = appPrefs.getString("proxy_password", "") ?: "",
                             themeMode = themeMode,
                             notificationsEnabled =
                                     appPrefs.getBoolean("notifications_enabled", true),
@@ -56,16 +58,27 @@ constructor(
                             socks5Enabled = appPrefs.getBoolean("socks5_enabled", true),
                             // Quota settings (simplified)
                             quotaEnabled = appPrefs.getBoolean("quota_enabled", false),
+                            quotaMode = appPrefs.getString("quota_mode", "") ?: "",
                             quotaTotalBandwidthMb = appPrefs.getLong("quota_total_bandwidth_mb", 0),
+                            quotaFixedPerClientMb = appPrefs.getLong("quota_fixed_per_client_mb", 0),
                             quotaBlockDurationHours =
-                                    appPrefs.getInt("quota_block_duration_hours", 1)
+                                    appPrefs.getInt("quota_block_duration_hours", 1),
+                            // Device idle timeout (default: 5 minutes)
+                            deviceIdleTimeoutMinutes = appPrefs.getInt("device_idle_timeout_minutes", 5)
                     )
         }
     }
 
-    // TODO: Add authentication functionality
     fun updateAuthEnabled(enabled: Boolean) {
-        _uiState.value = _uiState.value.copy(authEnabled = enabled)
+        _uiState.value = _uiState.value.copy(authEnabled = enabled, validationError = null)
+    }
+
+    fun updateAuthUsername(username: String) {
+        _uiState.value = _uiState.value.copy(authUsername = username)
+    }
+
+    fun updateAuthPassword(password: String) {
+        _uiState.value = _uiState.value.copy(authPassword = password)
     }
 
     fun updateThemeMode(themeMode: ThemeMode) {
@@ -109,7 +122,20 @@ constructor(
     fun saveSettings() {
         viewModelScope.launch {
             val state = _uiState.value
+
+            if (state.authEnabled &&
+                    (state.authUsername.isBlank() || state.authPassword.isBlank())) {
+                _uiState.value =
+                        state.copy(
+                                validationError =
+                                        "Username and password are required when authentication is enabled"
+                        )
+                return@launch
+            }
+
             appPrefs.putBoolean("auth_enabled", state.authEnabled)
+            appPrefs.putString("proxy_username", state.authUsername)
+            appPrefs.putString("proxy_password", state.authPassword)
             appPrefs.putString("theme_mode", state.themeMode.name)
             appPrefs.putBoolean("notifications_enabled", state.notificationsEnabled)
             appPrefs.putBoolean("http_https_enabled", state.httpHttpsEnabled)
@@ -118,9 +144,14 @@ constructor(
             // Save quota settings (simplified - only essential ones)
             appPrefs.putBoolean("quota_enabled", state.quotaEnabled)
             if (state.quotaEnabled) {
+                appPrefs.putString("quota_mode", state.quotaMode)
                 appPrefs.putLong("quota_total_bandwidth_mb", state.quotaTotalBandwidthMb)
+                appPrefs.putLong("quota_fixed_per_client_mb", state.quotaFixedPerClientMb)
                 appPrefs.putInt("quota_block_duration_hours", state.quotaBlockDurationHours)
             }
+
+            // Save device idle timeout
+            appPrefs.putInt("device_idle_timeout_minutes", state.deviceIdleTimeoutMinutes)
 
             // Reload quota configuration
             quotaManager.loadConfig()
@@ -132,6 +163,10 @@ constructor(
         _uiState.value = _uiState.value.copy(quotaEnabled = enabled)
     }
 
+    fun updateQuotaMode(mode: String) {
+        _uiState.value = _uiState.value.copy(quotaMode = mode)
+    }
+
     fun updateQuotaSettings(totalBandwidthMb: Long, blockDurationHours: Int) {
         _uiState.value =
                 _uiState.value.copy(
@@ -140,6 +175,22 @@ constructor(
                 )
         // Save settings and reload quota config (which will clear blocks if duration is 0)
         saveSettings()
+    }
+
+    fun updateFixedQuotaSettings(quotaPerClientMb: Long, blockDurationHours: Int) {
+        _uiState.value =
+                _uiState.value.copy(
+                        quotaFixedPerClientMb = quotaPerClientMb,
+                        quotaBlockDurationHours = blockDurationHours
+                )
+        // Save settings and reload quota config
+        saveSettings()
+    }
+
+    fun updateDeviceIdleTimeoutMinutes(minutes: Int) {
+        _uiState.value = _uiState.value.copy(deviceIdleTimeoutMinutes = minutes)
+        // Auto-save immediately for instant feedback
+        appPrefs.putInt("device_idle_timeout_minutes", minutes)
     }
 
     /**
@@ -235,6 +286,8 @@ constructor(
 
 data class SettingsUiState(
         val authEnabled: Boolean = false,
+        val authUsername: String = "",
+        val authPassword: String = "",
         val themeMode: ThemeMode = ThemeMode.SYSTEM,
         val notificationsEnabled: Boolean = true,
         val httpHttpsEnabled: Boolean = true,
@@ -246,6 +299,10 @@ data class SettingsUiState(
         val clearDatabaseError: String? = null,
         // Quota settings (simplified - only essential)
         val quotaEnabled: Boolean = false,
+        val quotaMode: String = "", // "dynamic" or "fixed" (empty = not selected yet)
         val quotaTotalBandwidthMb: Long = 0,
-        val quotaBlockDurationHours: Int = 1
+        val quotaFixedPerClientMb: Long = 0,
+        val quotaBlockDurationHours: Int = 1,
+        // Device idle timeout (minutes) - devices inactive longer than this are removed from real-time display
+        val deviceIdleTimeoutMinutes: Int = 5
 )

@@ -332,6 +332,14 @@ class ProxyServerImpl(
         val clientAddress = socket.remoteSocketAddress.toString()
         Log.i(TAG, "[PERF] handleClientConnection START: $clientAddress | Time: $connectionStartTime")
 
+        val instanceConfig = currentInstance?.config
+        val authConfigured =
+                instanceConfig?.authEnabled == true &&
+                        !instanceConfig.authUsername.isNullOrEmpty() &&
+                        !instanceConfig.authPassword.isNullOrEmpty()
+        val authUsername = if (authConfigured) instanceConfig?.authUsername else null
+        val authPassword = if (authConfigured) instanceConfig?.authPassword else null
+
         // Validate socket connection to prevent crashes
         if (socket.isClosed || !socket.isConnected) {
             Log.w(TAG, "Invalid socket connection, closing")
@@ -535,7 +543,10 @@ class ProxyServerImpl(
                     socketFactory = socketFactory,
                     inOverride = inOverride,
                     quotaManager = quotaManager,
-                    trafficFilterManager = trafficFilterManager
+                    trafficFilterManager = trafficFilterManager,
+                    authEnabled = authConfigured,
+                    authUsername = authUsername,
+                    authPassword = authPassword
                 ) { bytesUp, bytesDown ->
                     try {
                         val clientIpStr = socket.remoteSocketAddress.toString()
@@ -561,7 +572,10 @@ class ProxyServerImpl(
                     socketFactory = socketFactory,
                     inOverride = inOverride,
                     quotaManager = quotaManager,
-                    trafficFilterManager = trafficFilterManager
+                    trafficFilterManager = trafficFilterManager,
+                    authEnabled = authConfigured,
+                    authUsername = authUsername,
+                    authPassword = authPassword
                 ) { bytesUp, bytesDown ->
                     try {
                         val clientIpStr = socket.remoteSocketAddress.toString()
@@ -832,6 +846,14 @@ class ProxyServerImpl(
     private fun generatePacFile(hotspotIp: String, config: ProxyConfig): String {
         val httpPort = config.httpPort
         val socksPort = config.socks5Port
+        val authNotice =
+                if (config.authEnabled &&
+                        !config.authUsername.isNullOrEmpty() &&
+                        !config.authPassword.isNullOrEmpty()) {
+                    "\n    // Authentication enabled - configure proxy username/password on this device"
+                } else {
+                    ""
+                }
 
         val proxyList = buildList {
             when (config.proxyType) {
@@ -853,6 +875,7 @@ class ProxyServerImpl(
 function FindProxyForURL(url, host) {
     // ShieldShare PAC Configuration
     // Generated automatically for hotspot clients
+$authNotice
     
     // Direct access for local networks
     if (isLocalNetwork(host)) {
@@ -894,6 +917,10 @@ function isLocalNetwork(host) {
         val socksPort = config.socks5Port
         val portalPort = ProxyPortManager.CONFIG_PORT
         val pacUrl = "http://$hotspotIp:$portalPort/proxy.pac"
+        val authConfigured =
+                config.authEnabled &&
+                        !config.authUsername.isNullOrEmpty() &&
+                        !config.authPassword.isNullOrEmpty()
 
         // Build manual proxy settings list based on enabled protocols
         val manualProxySettings = buildList {
@@ -918,6 +945,22 @@ function isLocalNetwork(host) {
                 }
             }
         }
+
+        val authSection =
+                if (authConfigured) {
+                    """
+        <div class="config-section">
+            <h3>Proxy Credentials</h3>
+            <p>Enter these credentials when prompted by ShieldShare proxy authentication.</p>
+            <ul>
+                <li>Username: <span class="mini-code">${config.authUsername}</span></li>
+                <li>Password: <span class="mini-code">${config.authPassword}</span></li>
+            </ul>
+        </div>
+                    """.trimIndent()
+                } else {
+                    ""
+                }
 
         // Build alert message for auto-configure based on enabled protocols
         val alertMessage =
@@ -958,7 +1001,8 @@ function isLocalNetwork(host) {
         
         <div class="info">
             <strong>Gateway:</strong> $hotspotIp<br>
-            <strong>PAC URL:</strong> $pacUrl
+            <strong>PAC URL:</strong> $pacUrl<br>
+            <strong>Authentication:</strong> ${if (authConfigured) "Enabled" else "Disabled"}
         </div>
         
         <div class="config-section">
@@ -982,6 +1026,7 @@ function isLocalNetwork(host) {
             <div class="code">$pacUrl</div>
             <p><small>Copy this URL to your device's Proxy Auto-Configuration settings</small></p>
         </div>
+        $authSection
     </div>
     
     <script>
@@ -1023,13 +1068,23 @@ function isLocalNetwork(host) {
                 try {
                     val currentTime = System.currentTimeMillis()
                     val iterator = connectedClients.iterator()
+                    var removedClients = mutableListOf<String>()
 
                     while (iterator.hasNext()) {
                         val (ip, timestamp) = iterator.next()
                         if (currentTime - timestamp > CLIENT_TIMEOUT_MS) {
                             iterator.remove()
+                            removedClients.add(ip)
                             Log.d(TAG, "Removed stale client IP: $ip")
                         }
+                    }
+
+                    // Recalculate quotas if any clients were removed
+                    if (removedClients.isNotEmpty()) {
+                        val hostIp = hotspotManager.getHotspotIpAddress()
+                        val connectedClientList = connectedClients.keys.toList()
+                        quotaManager.initializeQuotas(connectedClientList, hostIp)
+                        Log.i(TAG, "Quotas recalculated after cleanup: removed ${removedClients.size} stale client(s), ${connectedClientList.size} clients remaining")
                     }
 
                     delay(30_000) // Clean up every 30 seconds
@@ -1307,15 +1362,40 @@ function isLocalNetwork(host) {
     
     /**
      * Remove handler and update per-client counter atomically
+     * Also checks if client should be removed from connectedClients and quotas recalculated
      */
     private fun removeHandler(clientId: String, clientAddressStr: String) {
         val removed = proxyHandlers.remove(clientId)
         handlerTimestamps.remove(clientId)
         if (removed != null) {
             // Decrement per-client counter atomically
+            val hadHandlers = handlersPerClient.containsKey(clientAddressStr)
             handlersPerClient.compute(clientAddressStr) { _, count ->
                 val newCount = (count ?: 1) - 1
                 if (newCount <= 0) null else newCount // Remove entry if count reaches 0
+            }
+            
+            // Check if client now has no handlers and should be removed from connectedClients
+            val hasNoHandlers = !handlersPerClient.containsKey(clientAddressStr)
+            if (hadHandlers && hasNoHandlers) {
+                // Client had handlers before, but now has none - check if we should remove from connectedClients
+                // Only remove if they've been inactive for a reasonable time (30 seconds) to avoid removing active clients
+                val clientTimestamp = connectedClients[clientAddressStr]
+                if (clientTimestamp != null) {
+                    val timeSinceLastConnection = System.currentTimeMillis() - clientTimestamp
+                    if (timeSinceLastConnection > 30_000) { // 30 seconds grace period
+                        connectedClients.remove(clientAddressStr)
+                        Log.d(TAG, "Client $clientAddressStr removed from connectedClients (no active handlers for ${timeSinceLastConnection / 1000}s)")
+                        
+                        // Recalculate quotas immediately when client disconnects (launch in coroutine to avoid blocking)
+                        serviceScope.launch {
+                            val hostIp = hotspotManager.getHotspotIpAddress()
+                            val connectedClientList = connectedClients.keys.toList()
+                            quotaManager.initializeQuotas(connectedClientList, hostIp)
+                            Log.i(TAG, "Quotas recalculated after client disconnect: ${connectedClientList.size} clients remaining")
+                        }
+                    }
+                }
             }
         }
     }

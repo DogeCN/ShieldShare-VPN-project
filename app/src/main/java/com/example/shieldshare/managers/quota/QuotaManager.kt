@@ -71,6 +71,11 @@ class QuotaManager @Inject constructor(
         if (config.blockDurationMs == 0L && previousBlockDuration != 0L) {
             clearAllBlocks()
         }
+        
+        // Recalculate quotas for existing clients if quota is enabled
+        if (config.enabled) {
+            recalculateQuotas()
+        }
     }
     
     /**
@@ -106,8 +111,8 @@ class QuotaManager @Inject constructor(
      * @param hostIp Host device IP (included in quota calculation)
      */
     fun initializeQuotas(connectedClients: List<String>, hostIp: String? = null) {
-        if (!config.enabled || config.totalBandwidthBytes <= 0) {
-            Log.d(TAG, "Quota system disabled or unlimited bandwidth")
+        if (!config.enabled) {
+            Log.d(TAG, "Quota system disabled")
             return
         }
         
@@ -117,17 +122,38 @@ class QuotaManager @Inject constructor(
             return
         }
         
+        // Check quota mode: "dynamic" or "fixed"
+        val quotaMode = appPrefs.getString("quota_mode", "dynamic") ?: "dynamic"
+        val fixedQuotaPerClientMb = appPrefs.getLong("quota_fixed_per_client_mb", 0)
+        
         // Check if abuse detection is enabled
         val abuseDetectionEnabled = appPrefs.getBoolean("dynamic_quota_enabled", false)
         val abuseThresholdMultiplier = appPrefs.getFloat("dynamic_quota_multiplier", 2.0f)
         val averagePeriodDays = appPrefs.getInt("dynamic_quota_average_days", 7) // Default: 7 days (weekly)
         
-        // Always use static quota for allocation (equal distribution)
-        // Abuse detection is separate - it flags/clips abusers but doesn't change base allocation
-        val baseQuotaPerClient = config.totalBandwidthBytes / totalClients
+        // Calculate base quota based on mode
+        val baseQuotaPerClient = when (quotaMode) {
+            "fixed" -> {
+                // Fixed mode: each client gets the specified amount
+                val fixedQuotaBytes = fixedQuotaPerClientMb * 1024 * 1024
+                if (fixedQuotaBytes <= 0) {
+                    Log.w(TAG, "Fixed quota mode but quota is 0 or negative, skipping initialization")
+                    return
+                }
+                fixedQuotaBytes
+            }
+            else -> {
+                // Dynamic mode: divide total bandwidth equally
+                if (config.totalBandwidthBytes <= 0) {
+                    Log.d(TAG, "Dynamic mode but total bandwidth is 0, skipping initialization")
+                    return
+                }
+                config.totalBandwidthBytes / totalClients
+            }
+        }
         
         val quotaPerClientMb = baseQuotaPerClient.toDouble() / (1024 * 1024)
-        Log.i(TAG, "Initializing quotas: $totalClients clients, ${String.format("%.2f", quotaPerClientMb)} MB per client (${baseQuotaPerClient} bytes) [Abuse Detection: $abuseDetectionEnabled]")
+        Log.i(TAG, "Initializing quotas [$quotaMode mode]: $totalClients clients, ${String.format("%.2f", quotaPerClientMb)} MB per client (${baseQuotaPerClient} bytes) [Abuse Detection: $abuseDetectionEnabled]")
         
         // Update quotas for existing clients
         // IMPORTANT: When recalculating quotas (e.g., after settings change or new client connects),
@@ -154,11 +180,17 @@ class QuotaManager @Inject constructor(
             }
             
             // If quota allocation changed significantly (more than 10% difference), reset usage for fairness
-            val shouldResetUsage = existingState?.let { 
-                val oldQuota = it.allocatedQuotaBytes
-                val quotaChange = kotlin.math.abs(quotaForClient - oldQuota).toDouble() / oldQuota.coerceAtLeast(1)
-                quotaChange > 0.1 // More than 10% change
-            } ?: true // New client, always reset
+            // In FIXED mode, never reset usage (each client has independent quota)
+            // In DYNAMIC mode, reset when quota changes by >10%
+            val shouldResetUsage = if (quotaMode == "fixed") {
+                false // Fixed mode: never reset, clients have independent quotas
+            } else {
+                existingState?.let { 
+                    val oldQuota = it.allocatedQuotaBytes
+                    val quotaChange = kotlin.math.abs(quotaForClient - oldQuota).toDouble() / oldQuota.coerceAtLeast(1)
+                    quotaChange > 0.1 // More than 10% change
+                } ?: true // New client, always reset in dynamic mode
+            }
             
             val baseline = existingState?.usageBaselineBytes ?: actualUsage
             val adjustedUsage = existingState?.let { calculateAdjustedUsage(it, actualUsage) } ?: 0L

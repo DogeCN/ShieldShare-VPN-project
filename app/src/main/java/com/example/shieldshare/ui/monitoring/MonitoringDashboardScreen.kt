@@ -112,7 +112,7 @@ fun MonitoringDashboardScreen(
                             verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                                text = "Per-Device Traffic",
+                                text = "Real-Time Traffic",
                                 style = MaterialTheme.typography.headlineSmall,
                                 fontWeight = FontWeight.SemiBold
                         )

@@ -169,9 +169,10 @@ object AppModule {
     @Singleton
     fun provideTrafficMeter(
         @ApplicationContext ctx: Context,
-        trafficRepository: TrafficRepository
+        trafficRepository: TrafficRepository,
+        appPrefs: AppPrefs
     ): TrafficMeter =
-            TrafficMeterSimple(ctx, trafficRepository) // STAGE 2: Simple Traffic Metering Implementation
+            TrafficMeterSimple(ctx, trafficRepository, appPrefs) // STAGE 2: Simple Traffic Metering Implementation
 
     @Provides
     @Singleton
