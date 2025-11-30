@@ -1,0 +1,168 @@
+version: '3.8'
+
+services:
+  # Client 1-12 (for Device 1)
+  client1:
+    image: shieldshare-test-client:latest
+    container_name: test-client-1
+    environment:
+      - CLIENT_ID=1
+      - PROXY_HOST=192.168.43.1
+      - PROXY_PORT=8080
+      - TEST_DURATION=300
+    networks:
+      testnet:
+        ipv4_address: 192.168.43.101
+    restart: unless-stopped
+
+  client2:
+    image: shieldshare-test-client:latest
+    container_name: test-client-2
+    environment:
+      - CLIENT_ID=2
+      - PROXY_HOST=192.168.43.1
+      - PROXY_PORT=8080
+      - TEST_DURATION=300
+    networks:
+      testnet:
+        ipv4_address: 192.168.43.102
+    restart: unless-stopped
+
+  client3:
+    image: shieldshare-test-client:latest
+    container_name: test-client-3
+    environment:
+      - CLIENT_ID=3
+      - PROXY_HOST=192.168.43.1
+      - PROXY_PORT=8080
+      - TEST_DURATION=300
+    networks:
+      testnet:
+        ipv4_address: 192.168.43.103
+    restart: unless-stopped
+
+  client4:
+    image: shieldshare-test-client:latest
+    container_name: test-client-4
+    environment:
+      - CLIENT_ID=4
+      - PROXY_HOST=192.168.43.1
+      - PROXY_PORT=8080
+      - TEST_DURATION=300
+    networks:
+      testnet:
+        ipv4_address: 192.168.43.104
+    restart: unless-stopped
+
+  client5:
+    image: shieldshare-test-client:latest
+    container_name: test-client-5
+    environment:
+      - CLIENT_ID=5
+      - PROXY_HOST=192.168.43.1
+      - PROXY_PORT=8080
+      - TEST_DURATION=300
+    networks:
+      testnet:
+        ipv4_address: 192.168.43.105
+    restart: unless-stopped
+
+  client6:
+    image: shieldshare-test-client:latest
+    container_name: test-client-6
+    environment:
+      - CLIENT_ID=6
+      - PROXY_HOST=192.168.43.1
+      - PROXY_PORT=8080
+      - TEST_DURATION=300
+    networks:
+      testnet:
+        ipv4_address: 192.168.43.106
+    restart: unless-stopped
+
+  client7:
+    image: shieldshare-test-client:latest
+    container_name: test-client-7
+    environment:
+      - CLIENT_ID=7
+      - PROXY_HOST=192.168.43.1
+      - PROXY_PORT=8080
+      - TEST_DURATION=300
+    networks:
+      testnet:
+        ipv4_address: 192.168.43.107
+    restart: unless-stopped
+
+  client8:
+    image: shieldshare-test-client:latest
+    container_name: test-client-8
+    environment:
+      - CLIENT_ID=8
+      - PROXY_HOST=192.168.43.1
+      - PROXY_PORT=8080
+      - TEST_DURATION=300
+    networks:
+      testnet:
+        ipv4_address: 192.168.43.108
+    restart: unless-stopped
+
+  client9:
+    image: shieldshare-test-client:latest
+    container_name: test-client-9
+    environment:
+      - CLIENT_ID=9
+      - PROXY_HOST=192.168.43.1
+      - PROXY_PORT=8080
+      - TEST_DURATION=300
+    networks:
+      testnet:
+        ipv4_address: 192.168.43.109
+    restart: unless-stopped
+
+  client10:
+    image: shieldshare-test-client:latest
+    container_name: test-client-10
+    environment:
+      - CLIENT_ID=10
+      - PROXY_HOST=192.168.43.1
+      - PROXY_PORT=8080
+      - TEST_DURATION=300
+    networks:
+      testnet:
+        ipv4_address: 192.168.43.110
+    restart: unless-stopped
+
+  client11:
+    image: shieldshare-test-client:latest
+    container_name: test-client-11
+    environment:
+      - CLIENT_ID=11
+      - PROXY_HOST=192.168.43.1
+      - PROXY_PORT=8080
+      - TEST_DURATION=300
+    networks:
+      testnet:
+        ipv4_address: 192.168.43.111
+    restart: unless-stopped
+
+  client12:
+    image: shieldshare-test-client:latest
+    container_name: test-client-12
+    environment:
+      - CLIENT_ID=12
+      - PROXY_HOST=192.168.43.1
+      - PROXY_PORT=8080
+      - TEST_DURATION=300
+    networks:
+      testnet:
+        ipv4_address: 192.168.43.112
+    restart: unless-stopped
+
+networks:
+  testnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.43.0/24
+          gateway: 192.168.43.1
+
