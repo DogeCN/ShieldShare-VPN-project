@@ -27,13 +27,10 @@ abstract class ProxyHandler(
     protected open fun authenticate(client: Socket): Boolean = true
 
     /**
-     * Hook method for recording metrics TODO: JIALU - This method is ready for traffic metering
-     * integration
+     * Hook method for recording metrics
      */
     protected fun recordMetrics(bytesUp: Long, bytesDown: Long) {
         // This will be called by subclasses to record traffic
-        // The actual implementation depends on the traffic meter
-        // TODO: JIALU - Implement actual traffic recording logic here
     }
 
     /** Send authentication error response */

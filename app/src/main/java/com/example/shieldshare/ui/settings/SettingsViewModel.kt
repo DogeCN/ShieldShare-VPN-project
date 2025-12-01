@@ -22,11 +22,11 @@ import kotlinx.coroutines.launch
 class SettingsViewModel
 @Inject
 constructor(
-        private val appPrefs: AppPrefs,
-        private val trafficRepository: TrafficRepository,
-        private val quotaManager: QuotaManager,
-        private val trafficMeter: TrafficMeter,
-        @ApplicationContext private val context: Context
+    private val appPrefs: AppPrefs,
+    private val trafficRepository: TrafficRepository,
+    private val quotaManager: QuotaManager,
+    private val trafficMeter: TrafficMeter,
+    @ApplicationContext private val context: Context
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState())
@@ -40,32 +40,32 @@ constructor(
         viewModelScope.launch {
             val themeModeString = appPrefs.getString("theme_mode", "SYSTEM") ?: "SYSTEM"
             val themeMode =
-                    try {
-                        ThemeMode.valueOf(themeModeString)
-                    } catch (e: Exception) {
-                        ThemeMode.SYSTEM
-                    }
+                try {
+                    ThemeMode.valueOf(themeModeString)
+                } catch (e: Exception) {
+                    ThemeMode.SYSTEM
+                }
 
             _uiState.value =
-                    SettingsUiState(
-                            authEnabled = appPrefs.getBoolean("auth_enabled", false),
-                            authUsername = appPrefs.getString("proxy_username", "") ?: "",
-                            authPassword = appPrefs.getString("proxy_password", "") ?: "",
-                            themeMode = themeMode,
-                            notificationsEnabled =
-                                    appPrefs.getBoolean("notifications_enabled", true),
-                            httpHttpsEnabled = appPrefs.getBoolean("http_https_enabled", true),
-                            socks5Enabled = appPrefs.getBoolean("socks5_enabled", true),
-                            // Quota settings (simplified)
-                            quotaEnabled = appPrefs.getBoolean("quota_enabled", false),
-                            quotaMode = appPrefs.getString("quota_mode", "") ?: "",
-                            quotaTotalBandwidthMb = appPrefs.getLong("quota_total_bandwidth_mb", 0),
-                            quotaFixedPerClientMb = appPrefs.getLong("quota_fixed_per_client_mb", 0),
-                            quotaBlockDurationHours =
-                                    appPrefs.getInt("quota_block_duration_hours", 1),
-                            // Device idle timeout (default: 5 minutes)
-                            deviceIdleTimeoutMinutes = appPrefs.getInt("device_idle_timeout_minutes", 5)
-                    )
+                SettingsUiState(
+                    authEnabled = appPrefs.getBoolean("auth_enabled", false),
+                    authUsername = appPrefs.getString("proxy_username", "") ?: "",
+                    authPassword = appPrefs.getString("proxy_password", "") ?: "",
+                    themeMode = themeMode,
+                    notificationsEnabled =
+                        appPrefs.getBoolean("notifications_enabled", true),
+                    httpHttpsEnabled = appPrefs.getBoolean("http_https_enabled", true),
+                    socks5Enabled = appPrefs.getBoolean("socks5_enabled", true),
+                    // Quota settings (simplified)
+                    quotaEnabled = appPrefs.getBoolean("quota_enabled", false),
+                    quotaMode = appPrefs.getString("quota_mode", "") ?: "",
+                    quotaTotalBandwidthMb = appPrefs.getLong("quota_total_bandwidth_mb", 0),
+                    quotaFixedPerClientMb = appPrefs.getLong("quota_fixed_per_client_mb", 0),
+                    quotaBlockDurationHours =
+                        appPrefs.getInt("quota_block_duration_hours", 1),
+                    // Device idle timeout (default: 5 minutes)
+                    deviceIdleTimeoutMinutes = appPrefs.getInt("device_idle_timeout_minutes", 5)
+                )
         }
     }
 
@@ -98,9 +98,9 @@ constructor(
         // Prevent disabling if SOCKS5 is already disabled
         if (!enabled && !currentState.socks5Enabled) {
             _uiState.value =
-                    currentState.copy(
-                            validationError = "At least one proxy protocol must be enabled"
-                    )
+                currentState.copy(
+                    validationError = "At least one proxy protocol must be enabled"
+                )
             return
         }
         _uiState.value = currentState.copy(httpHttpsEnabled = enabled, validationError = null)
@@ -111,9 +111,9 @@ constructor(
         // Prevent disabling if HTTP/HTTPS is already disabled
         if (!enabled && !currentState.httpHttpsEnabled) {
             _uiState.value =
-                    currentState.copy(
-                            validationError = "At least one proxy protocol must be enabled"
-                    )
+                currentState.copy(
+                    validationError = "At least one proxy protocol must be enabled"
+                )
             return
         }
         _uiState.value = currentState.copy(socks5Enabled = enabled, validationError = null)
@@ -124,12 +124,13 @@ constructor(
             val state = _uiState.value
 
             if (state.authEnabled &&
-                    (state.authUsername.isBlank() || state.authPassword.isBlank())) {
+                (state.authUsername.isBlank() || state.authPassword.isBlank())
+            ) {
                 _uiState.value =
-                        state.copy(
-                                validationError =
-                                        "Username and password are required when authentication is enabled"
-                        )
+                    state.copy(
+                        validationError =
+                            "Username and password are required when authentication is enabled"
+                    )
                 return@launch
             }
 
@@ -169,20 +170,20 @@ constructor(
 
     fun updateQuotaSettings(totalBandwidthMb: Long, blockDurationHours: Int) {
         _uiState.value =
-                _uiState.value.copy(
-                        quotaTotalBandwidthMb = totalBandwidthMb,
-                        quotaBlockDurationHours = blockDurationHours
-                )
+            _uiState.value.copy(
+                quotaTotalBandwidthMb = totalBandwidthMb,
+                quotaBlockDurationHours = blockDurationHours
+            )
         // Save settings and reload quota config (which will clear blocks if duration is 0)
         saveSettings()
     }
 
     fun updateFixedQuotaSettings(quotaPerClientMb: Long, blockDurationHours: Int) {
         _uiState.value =
-                _uiState.value.copy(
-                        quotaFixedPerClientMb = quotaPerClientMb,
-                        quotaBlockDurationHours = blockDurationHours
-                )
+            _uiState.value.copy(
+                quotaFixedPerClientMb = quotaPerClientMb,
+                quotaBlockDurationHours = blockDurationHours
+            )
         // Save settings and reload quota config
         saveSettings()
     }
@@ -204,10 +205,10 @@ constructor(
     fun detectBandwidth(): Long? {
         return try {
             val connectivityManager =
-                    context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             val activeNetwork = connectivityManager.activeNetwork ?: return null
             val networkCapabilities =
-                    connectivityManager.getNetworkCapabilities(activeNetwork) ?: return null
+                connectivityManager.getNetworkCapabilities(activeNetwork) ?: return null
 
             // Try to get link bandwidth (available on Android 6.0+)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -252,27 +253,27 @@ constructor(
     fun clearTrafficData() {
         viewModelScope.launch {
             _uiState.value =
-                    _uiState.value.copy(
-                            isClearingDatabase = true,
-                            clearDatabaseError = null,
-                            clearDatabaseSuccess = false
-                    )
+                _uiState.value.copy(
+                    isClearingDatabase = true,
+                    clearDatabaseError = null,
+                    clearDatabaseSuccess = false
+                )
 
             try {
                 trafficRepository.clearAllTrafficData()
                 _uiState.value =
-                        _uiState.value.copy(
-                                isClearingDatabase = false,
-                                clearDatabaseSuccess = true,
-                                clearDatabaseError = null
-                        )
+                    _uiState.value.copy(
+                        isClearingDatabase = false,
+                        clearDatabaseSuccess = true,
+                        clearDatabaseError = null
+                    )
             } catch (e: Exception) {
                 _uiState.value =
-                        _uiState.value.copy(
-                                isClearingDatabase = false,
-                                clearDatabaseSuccess = false,
-                                clearDatabaseError = "Failed to clear traffic data: ${e.message}"
-                        )
+                    _uiState.value.copy(
+                        isClearingDatabase = false,
+                        clearDatabaseSuccess = false,
+                        clearDatabaseError = "Failed to clear traffic data: ${e.message}"
+                    )
             }
         }
     }
@@ -280,29 +281,29 @@ constructor(
     /** Reset clear database UI state (called after showing snackbar). */
     fun resetClearDatabaseState() {
         _uiState.value =
-                _uiState.value.copy(clearDatabaseSuccess = false, clearDatabaseError = null)
+            _uiState.value.copy(clearDatabaseSuccess = false, clearDatabaseError = null)
     }
 }
 
 data class SettingsUiState(
-        val authEnabled: Boolean = false,
-        val authUsername: String = "",
-        val authPassword: String = "",
-        val themeMode: ThemeMode = ThemeMode.SYSTEM,
-        val notificationsEnabled: Boolean = true,
-        val httpHttpsEnabled: Boolean = true,
-        val socks5Enabled: Boolean = true,
-        val validationError: String? = null,
-        // Clear database states
-        val isClearingDatabase: Boolean = false,
-        val clearDatabaseSuccess: Boolean = false,
-        val clearDatabaseError: String? = null,
-        // Quota settings (simplified - only essential)
-        val quotaEnabled: Boolean = false,
-        val quotaMode: String = "", // "dynamic" or "fixed" (empty = not selected yet)
-        val quotaTotalBandwidthMb: Long = 0,
-        val quotaFixedPerClientMb: Long = 0,
-        val quotaBlockDurationHours: Int = 1,
-        // Device idle timeout (minutes) - devices inactive longer than this are removed from real-time display
-        val deviceIdleTimeoutMinutes: Int = 5
+    val authEnabled: Boolean = false,
+    val authUsername: String = "",
+    val authPassword: String = "",
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val notificationsEnabled: Boolean = true,
+    val httpHttpsEnabled: Boolean = true,
+    val socks5Enabled: Boolean = true,
+    val validationError: String? = null,
+    // Clear database states
+    val isClearingDatabase: Boolean = false,
+    val clearDatabaseSuccess: Boolean = false,
+    val clearDatabaseError: String? = null,
+    // Quota settings (simplified - only essential)
+    val quotaEnabled: Boolean = false,
+    val quotaMode: String = "", // "dynamic" or "fixed" (empty = not selected yet)
+    val quotaTotalBandwidthMb: Long = 0,
+    val quotaFixedPerClientMb: Long = 0,
+    val quotaBlockDurationHours: Int = 1,
+    // Device idle timeout (minutes) - devices inactive longer than this are removed from real-time display
+    val deviceIdleTimeoutMinutes: Int = 5
 )

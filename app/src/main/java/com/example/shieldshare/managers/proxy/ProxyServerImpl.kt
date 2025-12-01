@@ -359,7 +359,7 @@ class ProxyServerImpl(
         val hostIp = hotspotManager.getHotspotIpAddress()
         
         // Check quota before accepting connection (for non-host clients)
-        // Note: We'll check protocol type later, so for now use HTTP response as default
+        // Use HTTP response as default
         if (hostIp == null || clientIp != hostIp) {
             if (quotaManager.isClientBlocked(clientIp)) {
                 Log.w(TAG, "Connection rejected: Client $clientIp is blocked due to quota exhaustion")
@@ -701,8 +701,6 @@ class ProxyServerImpl(
     }
 
     /**
-     * （KEEP）VPN Integration Point for Hanchen
-     *
      * Note: Under the current approach of using the system-level third-party VPN, there is no need
      * to "write into a VPN tunnel" here. All outbound sockets are already bound to the VPN via
      * activeNetwork.socketFactory. This method is only for logging and policy control.
@@ -1216,7 +1214,7 @@ function isLocalNetwork(host) {
         val subnet = hotspotIp.substringBeforeLast(".")
         Log.i(TAG, "Scanning subnet: $subnet.x for connected devices")
 
-        // sacn client address
+        // Scan client address
         val scanJobs =
                 (2..10).map { i ->
                     clientDetectionScope.async {
@@ -1245,7 +1243,7 @@ function isLocalNetwork(host) {
                     }
                 }
 
-        // waiting ping
+        // Waiting ping
         withTimeoutOrNull(3000) { scanJobs.awaitAll() }
 
         Log.i(TAG, "Scan completed. Total connected clients: ${connectedClients.size}")

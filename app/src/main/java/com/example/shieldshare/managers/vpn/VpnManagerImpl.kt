@@ -16,7 +16,7 @@ class VpnManagerImpl(private val context: Context) : VpnManager {
 
     override suspend fun connectVpn(config: VpnConfig): Result<VpnConnection> {
         return try {
-            // priority to open the  third-party VPN application. if not, return to the system VPN settings page.
+            // Priority to open the third-party VPN application. If not, return to the system VPN settings page.
             val launchIntent = config.thirdPartyPackage
                 ?.let { context.packageManager.getLaunchIntentForPackage(it) }
             val intent = (launchIntent ?: Intent(Settings.ACTION_VPN_SETTINGS))

@@ -238,7 +238,6 @@ class TrafficMeterSimple @Inject constructor(
      * GET HISTORICAL STATS (basic implementation)
      */
     override fun getHistoricalStats(timeRange: TimeRange): List<ClientTrafficStats> {
-        // For now, just return current stats filtered by time range
         val startTime = timeRange.startTime
         val endTime = timeRange.endTime
         

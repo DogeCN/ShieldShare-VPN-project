@@ -34,13 +34,13 @@ import kotlinx.coroutines.launch
 class HomeViewModel
 @Inject
 constructor(
-        private val vpnManager: VpnManager,
-        private val proxyServer: ProxyServer,
-        private val hotspotManager: HotspotManager,
-        private val appPrefs: AppPrefs,
-        private val ipProvider: IpAddressProvider,
-        private val trafficMeter: com.example.shieldshare.managers.meter.TrafficMeter,
-        private val trafficRepository: com.example.shieldshare.data.repository.TrafficRepository
+    private val vpnManager: VpnManager,
+    private val proxyServer: ProxyServer,
+    private val hotspotManager: HotspotManager,
+    private val appPrefs: AppPrefs,
+    private val ipProvider: IpAddressProvider,
+    private val trafficMeter: com.example.shieldshare.managers.meter.TrafficMeter,
+    private val trafficRepository: com.example.shieldshare.data.repository.TrafficRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HomeUiState())
@@ -48,7 +48,7 @@ constructor(
 
     private var ipAutoJob: Job? = null
     private val ipRefreshIntervalMs = 30_000L // fresh every 30 sec
-    
+
     // Service Session tracking (starts when both proxy and VPN are active)
     private var serviceSessionStartTime: Long? = null
     private var serviceSessionUpdateJob: Job? = null
@@ -56,24 +56,27 @@ constructor(
 
     init {
         viewModelScope.launch { refreshIp() }
-        
+
         // On app launch, end any active service sessions from previous app instance
         // This ensures we always start fresh, even if VPN and proxy are already running
         viewModelScope.launch {
             try {
                 val activeSession = trafficRepository.getActiveServiceSession()
                 if (activeSession != null) {
-                    Log.i("HomeViewModel", "Found active session from previous app instance, ending it: ${activeSession.sessionId}")
+                    Log.i(
+                        "HomeViewModel",
+                        "Found active session from previous app instance, ending it: ${activeSession.sessionId}"
+                    )
                     trafficRepository.endServiceSession(activeSession.sessionId)
                 }
-                
+
                 // After ending any active session, check if both VPN and proxy are already running
                 // If so, start a new session (this handles the case where app was closed but services kept running)
                 delay(1000) // Small delay to ensure state is updated
                 val proxyInfo = proxyServer.getProxyInfo()
                 val vpnStatus = vpnManager.getConnectionStatus()
                 val bothActive = proxyInfo.isRunning && vpnStatus == VpnStatus.CONNECTED
-                
+
                 if (bothActive) {
                     // Update UI state to reflect current status
                     _uiState.value = _uiState.value.copy(
@@ -98,33 +101,34 @@ constructor(
             vpnManager.subscribeToStatusChanges().collect { status ->
                 val connected = (status == VpnStatus.CONNECTED)
                 _uiState.value =
-                        _uiState.value.copy(
-                                vpnStatus = status.name,
-                                isVpnConnected = status == VpnStatus.CONNECTED,
-                                isVpnConnecting = status == VpnStatus.CONNECTING
-                        )
-                
+                    _uiState.value.copy(
+                        vpnStatus = status.name,
+                        isVpnConnected = status == VpnStatus.CONNECTED,
+                        isVpnConnecting = status == VpnStatus.CONNECTING
+                    )
+
                 // Update service session state
                 updateServiceSessionState()
-                
+
                 if (connected) {
                     refreshIp() // fresh IP
                     if (ipAutoJob?.isActive != true) {
                         ipAutoJob =
-                                viewModelScope.launch {
-                                    // fresh it when it start
+                            viewModelScope.launch {
+                                // fresh it when it start
+                                refreshIp()
+                                // fresh it as time we set
+                                while (isActive) {
+                                    delay(ipRefreshIntervalMs)
                                     refreshIp()
-                                    // fresh it as time we set
-                                    while (isActive) {
-                                        delay(ipRefreshIntervalMs)
-                                        refreshIp()
-                                    }
                                 }
+                            }
                     }
                 } else {
                     // when disconnect, fresh the IP address
                     ipAutoJob?.cancel()
-                    _uiState.value = _uiState.value.copy(localIpAddress = null, publicIpAddress = null)
+                    _uiState.value =
+                        _uiState.value.copy(localIpAddress = null, publicIpAddress = null)
                 }
             }
         }
@@ -139,12 +143,12 @@ constructor(
                 val config = com.example.shieldshare.managers.vpn.VpnConfig()
                 val result = vpnManager.connectVpn(config)
                 result.fold(
-                        onSuccess = { connection ->
-                            Log.i("HomeViewModel", "VPN connected: $connection")
-                        },
-                        onFailure = { error ->
-                            Log.e("HomeViewModel", "Failed to connect VPN", error)
-                        }
+                    onSuccess = { connection ->
+                        Log.i("HomeViewModel", "VPN connected: $connection")
+                    },
+                    onFailure = { error ->
+                        Log.e("HomeViewModel", "Failed to connect VPN", error)
+                    }
                 )
             } catch (e: Exception) {
                 Log.e("HomeViewModel", "Exception connecting VPN", e)
@@ -157,10 +161,10 @@ constructor(
             try {
                 val result = vpnManager.disconnectVpn()
                 result.fold(
-                        onSuccess = { Log.i("HomeViewModel", "VPN disconnected") },
-                        onFailure = { error ->
-                            Log.e("HomeViewModel", "Failed to disconnect VPN", error)
-                        }
+                    onSuccess = { Log.i("HomeViewModel", "VPN disconnected") },
+                    onFailure = { error ->
+                        Log.e("HomeViewModel", "Failed to disconnect VPN", error)
+                    }
                 )
             } catch (e: Exception) {
                 Log.e("HomeViewModel", "Exception disconnecting VPN", e)
@@ -173,16 +177,16 @@ constructor(
             try {
                 val authEnabled = appPrefs.getBoolean("auth_enabled", false)
                 val proxyUsername =
-                        appPrefs.getString("proxy_username", "")?.takeIf { it.isNotBlank() }
+                    appPrefs.getString("proxy_username", "")?.takeIf { it.isNotBlank() }
                 val proxyPassword =
-                        appPrefs.getString("proxy_password", "")?.takeIf { it.isNotBlank() }
+                    appPrefs.getString("proxy_password", "")?.takeIf { it.isNotBlank() }
                 val effectiveAuthEnabled =
-                        authEnabled && proxyUsername != null && proxyPassword != null
+                    authEnabled && proxyUsername != null && proxyPassword != null
 
                 if (authEnabled && !effectiveAuthEnabled) {
                     Log.w(
-                            "HomeViewModel",
-                            "Proxy authentication enabled but credentials missing; starting without auth"
+                        "HomeViewModel",
+                        "Proxy authentication enabled but credentials missing; starting without auth"
                     )
                 }
                 val httpHttpsEnabled = appPrefs.getBoolean("http_https_enabled", true)
@@ -201,54 +205,54 @@ constructor(
                 }
 
                 val config =
-                        ProxyConfig(
-                                authEnabled = effectiveAuthEnabled,
-                                authUsername = proxyUsername,
-                                authPassword = proxyPassword,
-                                allowedClients = emptyList(),
-                                proxyType = proxyType
-                        )
+                    ProxyConfig(
+                        authEnabled = effectiveAuthEnabled,
+                        authUsername = proxyUsername,
+                        authPassword = proxyPassword,
+                        allowedClients = emptyList(),
+                        proxyType = proxyType
+                    )
 
                 val result = proxyServer.startProxy(config)
                 result.fold(
-                        onSuccess = { proxyInstance ->
-                            Log.i(
-                                    "HomeViewModel",
-                                    "Proxy servers started. HTTP/HTTPS ${config.httpPort}, SOCKS5 ${config.socks5Port}, auth=${config.authEnabled}"
-                            )
-                            val hotspotIp = hotspotManager.getHotspotIpAddress()
-                            val pacUrl =
-                                    hotspotIp?.let {
-                                        "http://$it:${ProxyPortManager.CONFIG_PORT}/proxy.pac"
-                                    }
-                            // Initialize speed tracking when proxy starts
-                            val initialStats = trafficMeter.getCurrentStats()
-                            previousTotalBytesUp = initialStats.sumOf { it.totalBytesUp }
-                            previousTotalBytesDown = initialStats.sumOf { it.totalBytesDown }
-                            lastStatsUpdateTime = System.currentTimeMillis()
-                            
-                            _uiState.value =
-                                    _uiState.value.copy(
-                                            isProxyRunning = true,
-                                            httpPort = config.httpPort,
-                                            httpsPort = config.httpsPort,
-                                            socks5Port = config.socks5Port,
-                                            proxyType = proxyType,
-                                            configPortalPort = ProxyPortManager.CONFIG_PORT,
-                                            pacUrl = pacUrl,
-                                            uploadSpeed = "0 B/s", // Will update immediately via startStatsUpdates
-                                            downloadSpeed = "0 B/s" // Will update immediately via startStatsUpdates
-                                    )
+                    onSuccess = { proxyInstance ->
+                        Log.i(
+                            "HomeViewModel",
+                            "Proxy servers started. HTTP/HTTPS ${config.httpPort}, SOCKS5 ${config.socks5Port}, auth=${config.authEnabled}"
+                        )
+                        val hotspotIp = hotspotManager.getHotspotIpAddress()
+                        val pacUrl =
+                            hotspotIp?.let {
+                                "http://$it:${ProxyPortManager.CONFIG_PORT}/proxy.pac"
+                            }
+                        // Initialize speed tracking when proxy starts
+                        val initialStats = trafficMeter.getCurrentStats()
+                        previousTotalBytesUp = initialStats.sumOf { it.totalBytesUp }
+                        previousTotalBytesDown = initialStats.sumOf { it.totalBytesDown }
+                        lastStatsUpdateTime = System.currentTimeMillis()
 
-                            // Update service session state
-                            updateServiceSessionState()
-                            
-                            // Start real-time stats updates
-                            startStatsUpdates()
-                        },
-                        onFailure = { error ->
-                            Log.e("HomeViewModel", "Failed to start proxy server", error)
-                        }
+                        _uiState.value =
+                            _uiState.value.copy(
+                                isProxyRunning = true,
+                                httpPort = config.httpPort,
+                                httpsPort = config.httpsPort,
+                                socks5Port = config.socks5Port,
+                                proxyType = proxyType,
+                                configPortalPort = ProxyPortManager.CONFIG_PORT,
+                                pacUrl = pacUrl,
+                                uploadSpeed = "0 B/s", // Will update immediately via startStatsUpdates
+                                downloadSpeed = "0 B/s" // Will update immediately via startStatsUpdates
+                            )
+
+                        // Update service session state
+                        updateServiceSessionState()
+
+                        // Start real-time stats updates
+                        startStatsUpdates()
+                    },
+                    onFailure = { error ->
+                        Log.e("HomeViewModel", "Failed to start proxy server", error)
+                    }
                 )
             } catch (e: Exception) {
                 Log.e("HomeViewModel", "Exception starting proxy server", e)
@@ -261,27 +265,27 @@ constructor(
             try {
                 val result = proxyServer.stopProxy()
                 result.fold(
-                        onSuccess = {
-                            Log.i("HomeViewModel", "Proxy server stopped")
-                            // Reset speed tracking
-                            previousTotalBytesUp = 0
-                            previousTotalBytesDown = 0
-                            lastStatsUpdateTime = System.currentTimeMillis()
-                            
-                            _uiState.value =
-                                    _uiState.value.copy(
-                                            isProxyRunning = false,
-                                            pacUrl = null,
-                                            uploadSpeed = "0 B/s",
-                                            downloadSpeed = "0 B/s"
-                                    )
-                            
-                            // Update service session state
-                            updateServiceSessionState()
-                        },
-                        onFailure = { error ->
-                            Log.e("HomeViewModel", "Failed to stop proxy server", error)
-                        }
+                    onSuccess = {
+                        Log.i("HomeViewModel", "Proxy server stopped")
+                        // Reset speed tracking
+                        previousTotalBytesUp = 0
+                        previousTotalBytesDown = 0
+                        lastStatsUpdateTime = System.currentTimeMillis()
+
+                        _uiState.value =
+                            _uiState.value.copy(
+                                isProxyRunning = false,
+                                pacUrl = null,
+                                uploadSpeed = "0 B/s",
+                                downloadSpeed = "0 B/s"
+                            )
+
+                        // Update service session state
+                        updateServiceSessionState()
+                    },
+                    onFailure = { error ->
+                        Log.e("HomeViewModel", "Failed to stop proxy server", error)
+                    }
                 )
             } catch (e: Exception) {
                 Log.e("HomeViewModel", "Exception stopping proxy server", e)
@@ -309,31 +313,32 @@ constructor(
                     try {
                         // Get real traffic data from TrafficMeter
                         val currentStats = trafficMeter.getCurrentStats()
-                        
+
                         // Calculate total traffic across all clients
                         val currentTotalBytesUp = currentStats.sumOf { it.totalBytesUp }
                         val currentTotalBytesDown = currentStats.sumOf { it.totalBytesDown }
-                        
+
                         // Calculate time delta
                         val currentTime = System.currentTimeMillis()
-                        val timeDelta = (currentTime - lastStatsUpdateTime).coerceAtLeast(100) // At least 100ms
-                        
+                        val timeDelta =
+                            (currentTime - lastStatsUpdateTime).coerceAtLeast(100) // At least 100ms
+
                         // Calculate speeds (bytes per second)
                         val bytesUpDiff = currentTotalBytesUp - previousTotalBytesUp
                         val bytesDownDiff = currentTotalBytesDown - previousTotalBytesDown
-                        
+
                         val uploadSpeedBps = (bytesUpDiff * 1000.0) / timeDelta
                         val downloadSpeedBps = (bytesDownDiff * 1000.0) / timeDelta
-                        
+
                         // Format speeds
                         val uploadSpeed = formatSpeed(uploadSpeedBps)
                         val downloadSpeed = formatSpeed(downloadSpeedBps)
-                        
+
                         _uiState.value = _uiState.value.copy(
-                                uploadSpeed = uploadSpeed,
-                                downloadSpeed = downloadSpeed
+                            uploadSpeed = uploadSpeed,
+                            downloadSpeed = downloadSpeed
                         )
-                        
+
                         // Update previous values for next calculation
                         previousTotalBytesUp = currentTotalBytesUp
                         previousTotalBytesDown = currentTotalBytesDown
@@ -351,7 +356,7 @@ constructor(
             }
         }
     }
-    
+
     /**
      * Format bytes per second to human-readable speed string.
      */
@@ -363,7 +368,7 @@ constructor(
             else -> "%.2f GB/s".format(bytesPerSecond / (1024.0 * 1024.0 * 1024.0))
         }
     }
-    
+
     /**
      * Update service session state based on proxy and VPN status.
      * Service session starts when both are active, ends when either stops.
@@ -371,24 +376,24 @@ constructor(
     private fun updateServiceSessionState() {
         val currentState = _uiState.value
         val bothActive = currentState.isProxyRunning && currentState.isVpnConnected
-        
+
         if (bothActive && serviceSessionStartTime == null) {
             // Reset per-device traffic stats FIRST to ensure clean state for new session
             // This prevents new session traffic from accumulating on previous session data
             // Must happen BEFORE marking session as started to avoid showing old data
             trafficMeter.resetCurrentSessionStats()
-            
+
             // Start service session AFTER stats are cleared
             val sessionId = java.util.UUID.randomUUID().toString()
             currentServiceSessionId = sessionId
             serviceSessionStartTime = System.currentTimeMillis()
             startServiceSessionTimer()
-            
+
             // Persist service session to database
             viewModelScope.launch {
                 trafficRepository.startServiceSession(sessionId)
             }
-            
+
             Log.i("HomeViewModel", "Service session started: $sessionId")
         } else if (!bothActive && serviceSessionStartTime != null) {
             // End service session
@@ -398,18 +403,18 @@ constructor(
             serviceSessionUpdateJob?.cancel()
             serviceSessionUpdateJob = null
             _uiState.value = _uiState.value.copy(serviceSessionUptime = null)
-            
+
             // Persist service session end to database
             if (sessionId != null) {
                 viewModelScope.launch {
                     trafficRepository.endServiceSession(sessionId)
                 }
             }
-            
+
             Log.i("HomeViewModel", "Service session ended: $sessionId")
         }
     }
-    
+
     /**
      * Start timer to update service session uptime display.
      */
@@ -425,7 +430,7 @@ constructor(
             }
         }
     }
-    
+
     /**
      * Format uptime in milliseconds to human-readable string (e.g., "2h 15m 30s").
      */
@@ -434,7 +439,7 @@ constructor(
         val hours = totalSeconds / 3600
         val minutes = (totalSeconds % 3600) / 60
         val seconds = totalSeconds % 60
-        
+
         return when {
             hours > 0 -> "${hours}h ${minutes}m ${seconds}s"
             minutes > 0 -> "${minutes}m ${seconds}s"
@@ -449,33 +454,33 @@ constructor(
                     // Check hotspot state
                     val hotspotState = hotspotManager.detectHotspotState()
                     val isEnabled =
-                            hotspotState ==
-                                    com.example.shieldshare.managers.hotspot.HotspotState.ENABLED
+                        hotspotState ==
+                                com.example.shieldshare.managers.hotspot.HotspotState.ENABLED
 
                     // Get connected clients from proxy server (IP-based counting)
                     val proxyInfo = proxyServer.getProxyInfo()
                     val clientCount = proxyInfo.activeConnections
 
                     Log.d(
-                            "HomeViewModel",
-                            "Hotspot state: $hotspotState, enabled: $isEnabled, clients: $clientCount (from proxy server)"
+                        "HomeViewModel",
+                        "Hotspot state: $hotspotState, enabled: $isEnabled, clients: $clientCount (from proxy server)"
                     )
 
                     val wasProxyRunning = _uiState.value.isProxyRunning
                     _uiState.value =
-                            _uiState.value.copy(
-                                    isHotspotEnabled = isEnabled,
-                                    hotspotClients = clientCount,
-                                    activeConnections = clientCount, // Update active connections too
-                                    isProxyRunning = proxyInfo.isRunning,
-                                    httpPort = proxyInfo.httpPort,
-                                    httpsPort = proxyInfo.httpsPort,
-                                    socks5Port = proxyInfo.socks5Port,
-                                    proxyType = proxyInfo.proxyType,
-                                    pacUrl = proxyInfo.pacFileUrl,
-                                    configPortalPort = ProxyPortManager.CONFIG_PORT
-                            )
-                    
+                        _uiState.value.copy(
+                            isHotspotEnabled = isEnabled,
+                            hotspotClients = clientCount,
+                            activeConnections = clientCount, // Update active connections too
+                            isProxyRunning = proxyInfo.isRunning,
+                            httpPort = proxyInfo.httpPort,
+                            httpsPort = proxyInfo.httpsPort,
+                            socks5Port = proxyInfo.socks5Port,
+                            proxyType = proxyInfo.proxyType,
+                            pacUrl = proxyInfo.pacFileUrl,
+                            configPortalPort = ProxyPortManager.CONFIG_PORT
+                        )
+
                     // Update service session if proxy state changed
                     if (wasProxyRunning != proxyInfo.isRunning) {
                         updateServiceSessionState()
@@ -501,27 +506,27 @@ constructor(
     }
 
     fun refreshIp() =
-            viewModelScope.launch {
-                if (_uiState.value.isFetchingIp) return@launch
-                _uiState.value = _uiState.value.copy(isFetchingIp = true)
+        viewModelScope.launch {
+            if (_uiState.value.isFetchingIp) return@launch
+            _uiState.value = _uiState.value.copy(isFetchingIp = true)
 
-                // Get local IP
-                val localIp = hotspotManager.getHotspotIpAddress()
-                
-                // Get public IP
-                val publicIpResult = ipProvider.getPublicIp()
-                val publicIp = if (publicIpResult.isSuccess) {
-                    publicIpResult.getOrNull()
-                } else {
-                    null
-                }
-                
-                _uiState.value = _uiState.value.copy(
-                    isFetchingIp = false, 
-                    localIpAddress = localIp ?: "Not available",
-                    publicIpAddress = publicIp ?: "Not available"
-                )
+            // Get local IP
+            val localIp = hotspotManager.getHotspotIpAddress()
+
+            // Get public IP
+            val publicIpResult = ipProvider.getPublicIp()
+            val publicIp = if (publicIpResult.isSuccess) {
+                publicIpResult.getOrNull()
+            } else {
+                null
             }
+
+            _uiState.value = _uiState.value.copy(
+                isFetchingIp = false,
+                localIpAddress = localIp ?: "Not available",
+                publicIpAddress = publicIp ?: "Not available"
+            )
+        }
 
     fun generateQRCode(): ImageBitmap? {
         val currentState = _uiState.value
@@ -533,7 +538,10 @@ constructor(
         }
 
         if (portalPort <= 0) {
-            Log.w("HomeViewModel", "Cannot generate QR code: configuration portal port not available")
+            Log.w(
+                "HomeViewModel",
+                "Cannot generate QR code: configuration portal port not available"
+            )
             return null
         }
 
@@ -569,14 +577,14 @@ constructor(
             return null
         }
     }
-    
+
     /**
      * Called when the ViewModel is being cleared (e.g., when app is closed).
      * End any active service session to persist it to the database.
      */
     override fun onCleared() {
         super.onCleared()
-        
+
         // End active service session if one exists
         val sessionId = currentServiceSessionId
         if (sessionId != null) {
@@ -591,7 +599,7 @@ constructor(
                 }
             }
         }
-        
+
         // Cancel all jobs
         serviceSessionUpdateJob?.cancel()
         ipAutoJob?.cancel()
@@ -599,24 +607,24 @@ constructor(
 }
 
 data class HomeUiState(
-        val vpnStatus: String = "DISCONNECTED",
-        val isVpnConnected: Boolean = false,
-        val isVpnConnecting: Boolean = false,
-        val isProxyRunning: Boolean = false,
-        val httpPort: Int = ProxyPortManager.HTTP_PORT,
-        val httpsPort: Int = ProxyPortManager.HTTPS_PORT,
-        val socks5Port: Int = ProxyPortManager.SOCKS5_PORT,
-        val proxyType: ProxyType = ProxyType.BOTH,
-        val configPortalPort: Int = ProxyPortManager.CONFIG_PORT,
-        val pacUrl: String? = null,
-        val activeConnections: Int = 0,
-        val dataTransferred: String = "0 MB",
-        val uploadSpeed: String = "0 KB/s",
-        val downloadSpeed: String = "0 KB/s",
-        val serviceSessionUptime: Long? = null, // Uptime in milliseconds, null if session not active
-        val isHotspotEnabled: Boolean = false,
-        val hotspotClients: Int = 0,
-        val localIpAddress: String? = null,
-        val publicIpAddress: String? = null,
-        val isFetchingIp: Boolean = false
+    val vpnStatus: String = "DISCONNECTED",
+    val isVpnConnected: Boolean = false,
+    val isVpnConnecting: Boolean = false,
+    val isProxyRunning: Boolean = false,
+    val httpPort: Int = ProxyPortManager.HTTP_PORT,
+    val httpsPort: Int = ProxyPortManager.HTTPS_PORT,
+    val socks5Port: Int = ProxyPortManager.SOCKS5_PORT,
+    val proxyType: ProxyType = ProxyType.BOTH,
+    val configPortalPort: Int = ProxyPortManager.CONFIG_PORT,
+    val pacUrl: String? = null,
+    val activeConnections: Int = 0,
+    val dataTransferred: String = "0 MB",
+    val uploadSpeed: String = "0 KB/s",
+    val downloadSpeed: String = "0 KB/s",
+    val serviceSessionUptime: Long? = null, // Uptime in milliseconds, null if session not active
+    val isHotspotEnabled: Boolean = false,
+    val hotspotClients: Int = 0,
+    val localIpAddress: String? = null,
+    val publicIpAddress: String? = null,
+    val isFetchingIp: Boolean = false
 )
