@@ -71,30 +71,25 @@ This project explores how to extend the functionality of a stock Android phone (
    cd ShieldShare-VPN-project
    ```
 
-2. **Open in Android Studio**
+2. **Enable Developer Options** on your Android device
 
-   - Open the project in Android Studio
-   - Wait for Gradle sync to complete
+3. **Enable USB Debugging**
 
-3. **Enable Developer Options** on your Android device
+4. **Connect device** via USB
 
-4. **Enable USB Debugging**
-
-5. **Connect device** via USB
-
-6. **Build the project**
+5. **Build the project**
 
    ```bash
    ./gradlew assembleDebug
    ```
 
-7. **Install on device**
+6. **Install on device**
 
    ```bash
    adb install app/build/outputs/apk/debug/app-debug.apk
    ```
 
-8. **Open the app and grant necessary permissions** (Notification, Hotspot, etc.)
+7. **Open the app and grant necessary permissions** (Notification, Hotspot, etc.)
 
 ## Team Contributions
 
