@@ -62,12 +62,12 @@ This project explores how to extend the functionality of a stock Android phone (
 - Physical Android device (emulator has network limitations)
 - Third-party VPN app (e.g., NordVPN, ExpressVPN)
 
-### Installation Steps
+### Installation steps
 
 1. **Clone the repository**
 
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/yestark/ShieldShare-VPN-project.git
    cd ShieldShare-VPN-project
    ```
 
@@ -76,24 +76,25 @@ This project explores how to extend the functionality of a stock Android phone (
    - Open the project in Android Studio
    - Wait for Gradle sync to complete
 
-3. **Build the project**
+3. **Enable Developer Options** on your Android device
+
+4. **Enable USB Debugging**
+
+5. **Connect device** via USB
+
+6. **Build the project**
 
    ```bash
    ./gradlew assembleDebug
    ```
 
-4. **Install on device**
+7. **Install on device**
+
    ```bash
    adb install app/build/outputs/apk/debug/app-debug.apk
    ```
 
-### Running the Application
-
-1. **Enable Developer Options** on your Android device
-2. **Enable USB Debugging**
-3. **Connect device** via USB
-4. **Run the app** from Android Studio or install the APK
-5. **Grant necessary permissions** (Location, Hotspot, etc.)
+8. **Open the app and grant necessary permissions** (Notification, Hotspot, etc.)
 
 ## Team Contributions
 
