@@ -28,7 +28,7 @@ class Socks5ProxyHandler(
 ) : ProxyHandler(clientSocket, trafficMeter) {
     companion object {
         private const val TAG = "Socks5ProxyHandler"
-        private const val BUFFER_SIZE = 65536 // 64KB buffer for better throughput (increased from 8KB)
+        private const val BUFFER_SIZE = 65536 // 64KB buffer for better throughput
         private const val SOCKS_VERSION = 0x05
         private const val AUTH_METHOD_NONE = 0x00
         private const val AUTH_METHOD_USERNAME_PASSWORD = 0x02

@@ -24,1035 +24,1040 @@ import com.example.shieldshare.ui.theme.ThemeMode
 
 @Composable
 fun SettingsScreen(
-        navController: NavController? = null,
-        viewModel: SettingsViewModel = hiltViewModel(),
-        onThemeChanged: () -> Unit = {}
+    navController: NavController? = null,
+    viewModel: SettingsViewModel = hiltViewModel(),
+    onThemeChanged: () -> Unit = {}
 ) {
-        val uiState by viewModel.uiState.collectAsState()
-        val snackbarHostState = remember { SnackbarHostState() }
-        var showClearConfirmationDialog by remember { mutableStateOf(false) }
-        var showQuotaConfigDialog by remember { mutableStateOf(false) }
-        var showFixedQuotaConfigDialog by remember { mutableStateOf(false) }
+    val uiState by viewModel.uiState.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
+    var showClearConfirmationDialog by remember { mutableStateOf(false) }
+    var showQuotaConfigDialog by remember { mutableStateOf(false) }
+    var showFixedQuotaConfigDialog by remember { mutableStateOf(false) }
 
-        // Local state for quota dialog
-        var quotaBandwidthText by remember { mutableStateOf("") }
-        var quotaBlockHoursText by remember {
-                mutableStateOf(uiState.quotaBlockDurationHours.toString())
-        }
+    // Local state for quota dialog
+    var quotaBandwidthText by remember { mutableStateOf("") }
+    var quotaBlockHoursText by remember {
+        mutableStateOf(uiState.quotaBlockDurationHours.toString())
+    }
 
-        // Local state for fixed quota dialog
-        var fixedQuotaPerClientText by remember { mutableStateOf("") }
-        var fixedQuotaBlockHoursText by remember { mutableStateOf("1") }
+    // Local state for fixed quota dialog
+    var fixedQuotaPerClientText by remember { mutableStateOf("") }
+    var fixedQuotaBlockHoursText by remember { mutableStateOf("1") }
 
-        // Auto-detect bandwidth when dialog opens (if not already set)
-        LaunchedEffect(showQuotaConfigDialog) {
-                if (showQuotaConfigDialog) {
-                        // If user already has a value, use it; otherwise auto-detect
-                        if (uiState.quotaTotalBandwidthMb > 0) {
-                                quotaBandwidthText = uiState.quotaTotalBandwidthMb.toString()
-                        } else {
-                                // Auto-detect bandwidth
-                                val detected = viewModel.detectBandwidth()
-                                quotaBandwidthText = detected?.toString() ?: ""
-                        }
-                        quotaBlockHoursText = uiState.quotaBlockDurationHours.toString()
-                }
-        }
-
-        // Load fixed quota values when that dialog opens
-        LaunchedEffect(showFixedQuotaConfigDialog) {
-                if (showFixedQuotaConfigDialog) {
-                        if (uiState.quotaFixedPerClientMb > 0) {
-                                fixedQuotaPerClientText = uiState.quotaFixedPerClientMb.toString()
-                        }
-                        fixedQuotaBlockHoursText = uiState.quotaBlockDurationHours.toString()
-                }
-        }
-
-        // Show validation error snackbar
-        LaunchedEffect(uiState.validationError) {
-                uiState.validationError?.let { error ->
-                        snackbarHostState.showSnackbar(
-                                message = error,
-                                duration = SnackbarDuration.Short
-                        )
-                }
-        }
-
-        // Show clear database success snackbar
-        LaunchedEffect(uiState.clearDatabaseSuccess) {
-                if (uiState.clearDatabaseSuccess) {
-                        snackbarHostState.showSnackbar(
-                                message = "Traffic data cleared successfully",
-                                duration = SnackbarDuration.Short
-                        )
-                        viewModel.resetClearDatabaseState()
-                }
-        }
-
-        // Show clear database error snackbar
-        LaunchedEffect(uiState.clearDatabaseError) {
-                uiState.clearDatabaseError?.let { error ->
-                        snackbarHostState.showSnackbar(
-                                message = error,
-                                duration = SnackbarDuration.Long
-                        )
-                        viewModel.resetClearDatabaseState()
-                }
-        }
-
-        Scaffold(snackbarHost = { SnackbarHost(snackbarHostState) }) { paddingValues ->
-                LazyColumn(
-                        modifier =
-                                Modifier.fillMaxSize()
-                                        .padding(paddingValues)
-                                        .background(MaterialTheme.colorScheme.background)
-                                        .padding(horizontal = 12.dp)
-                                        .padding(top = 12.dp)
-                                        .padding(bottom = 6.dp)
-                                        .safeDrawingPadding(),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                        item {
-                                Card(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        colors =
-                                                CardDefaults.cardColors(
-                                                        containerColor =
-                                                                MaterialTheme.colorScheme.surface
-                                                ),
-                                        elevation =
-                                                CardDefaults.cardElevation(defaultElevation = 4.dp),
-                                        shape = RoundedCornerShape(12.dp)
-                                ) {
-                                        Column(
-                                                modifier = Modifier.padding(16.dp),
-                                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                                        ) {
-                                                Text(
-                                                        text = "Proxy Settings",
-                                                        style =
-                                                                MaterialTheme.typography
-                                                                        .headlineSmall,
-                                                        fontWeight = FontWeight.SemiBold
-                                                )
-
-                                                Text(
-                                                        text =
-                                                                "Note: Restart proxy server for changes to take effect",
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = MaterialTheme.colorScheme.primary,
-                                                )
-
-                                                // HTTP/HTTPS Proxy Toggle
-                                                Row(
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        horizontalArrangement =
-                                                                Arrangement.SpaceBetween,
-                                                        verticalAlignment =
-                                                                Alignment.CenterVertically
-                                                ) {
-                                                        Column(modifier = Modifier.weight(1f)) {
-                                                                Text(
-                                                                        text = "HTTP/HTTPS Proxy",
-                                                                        style =
-                                                                                MaterialTheme
-                                                                                        .typography
-                                                                                        .bodyMedium,
-                                                                        fontWeight =
-                                                                                FontWeight.Medium
-                                                                )
-                                                                Text(
-                                                                        text =
-                                                                                "Port ${ProxyPortManager.HTTP_PORT}",
-                                                                        style =
-                                                                                MaterialTheme
-                                                                                        .typography
-                                                                                        .bodySmall,
-                                                                        color =
-                                                                                MaterialTheme
-                                                                                        .colorScheme
-                                                                                        .onSurfaceVariant
-                                                                )
-                                                        }
-                                                        Switch(
-                                                                checked = uiState.httpHttpsEnabled,
-                                                                onCheckedChange = { enabled ->
-                                                                        viewModel
-                                                                                .updateHttpHttpsEnabled(
-                                                                                        enabled
-                                                                                )
-                                                                },
-                                                                enabled =
-                                                                        uiState.socks5Enabled ||
-                                                                                !uiState.httpHttpsEnabled // Disable only when
-                                                                // SOCKS5 is off and
-                                                                // HTTP/HTTPS is on
-                                                                )
-                                                }
-
-                                                // SOCKS5 Proxy Toggle
-                                                Row(
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        horizontalArrangement =
-                                                                Arrangement.SpaceBetween,
-                                                        verticalAlignment =
-                                                                Alignment.CenterVertically
-                                                ) {
-                                                        Column(modifier = Modifier.weight(1f)) {
-                                                                Text(
-                                                                        text = "SOCKS5 Proxy",
-                                                                        style =
-                                                                                MaterialTheme
-                                                                                        .typography
-                                                                                        .bodyMedium,
-                                                                        fontWeight =
-                                                                                FontWeight.Medium
-                                                                )
-                                                                Text(
-                                                                        text =
-                                                                                "Port ${ProxyPortManager.SOCKS5_PORT}",
-                                                                        style =
-                                                                                MaterialTheme
-                                                                                        .typography
-                                                                                        .bodySmall,
-                                                                        color =
-                                                                                MaterialTheme
-                                                                                        .colorScheme
-                                                                                        .onSurfaceVariant
-                                                                )
-                                                        }
-                                                        Switch(
-                                                                checked = uiState.socks5Enabled,
-                                                                onCheckedChange = { enabled ->
-                                                                        viewModel
-                                                                                .updateSocks5Enabled(
-                                                                                        enabled
-                                                                                )
-                                                                },
-                                                                enabled =
-                                                                        uiState.httpHttpsEnabled ||
-                                                                                !uiState.socks5Enabled // Disable only when
-                                                                // HTTP/HTTPS is off and
-                                                                // SOCKS5 is on
-                                                                )
-                                                }
-
-                                                Divider()
-
-                                                // Authentication Toggle
-                                                Row(
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        horizontalArrangement =
-                                                                Arrangement.SpaceBetween,
-                                                        verticalAlignment =
-                                                                Alignment.CenterVertically
-                                                ) {
-                                                        Text(
-                                                                text = "Enable Authentication",
-                                                                style =
-                                                                        MaterialTheme.typography
-                                                                                .bodyMedium
-                                                        )
-                                                        Switch(
-                                                                checked = uiState.authEnabled,
-                                                                onCheckedChange = { enabled ->
-                                                                        viewModel.updateAuthEnabled(
-                                                                                enabled
-                                                                        )
-                                                                }
-                                                        )
-                                                }
-
-                                                if (uiState.authEnabled) {
-                                                        OutlinedTextField(
-                                                                value = uiState.authUsername,
-                                                                onValueChange = {
-                                                                        viewModel
-                                                                                .updateAuthUsername(
-                                                                                        it
-                                                                                )
-                                                                },
-                                                                label = { Text("Proxy Username") },
-                                                                modifier = Modifier.fillMaxWidth(),
-                                                                singleLine = true
-                                                        )
-                                                        OutlinedTextField(
-                                                                value = uiState.authPassword,
-                                                                onValueChange = {
-                                                                        viewModel
-                                                                                .updateAuthPassword(
-                                                                                        it
-                                                                                )
-                                                                },
-                                                                label = { Text("Proxy Password") },
-                                                                modifier = Modifier.fillMaxWidth(),
-                                                                singleLine = true,
-                                                                visualTransformation =
-                                                                        PasswordVisualTransformation(),
-                                                                keyboardOptions =
-                                                                        KeyboardOptions(
-                                                                                keyboardType =
-                                                                                        KeyboardType
-                                                                                                .Password
-                                                                        )
-                                                        )
-                                                        Text(
-                                                                text =
-                                                                        "Credentials are stored securely on this device. Share them with clients that should use the proxy.",
-                                                                style =
-                                                                        MaterialTheme.typography
-                                                                                .bodySmall,
-                                                                color =
-                                                                        MaterialTheme.colorScheme
-                                                                                .onSurfaceVariant
-                                                        )
-                                                }
-                                        }
-                                }
-                        }
-
-                        item {
-                                Card(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        colors =
-                                                CardDefaults.cardColors(
-                                                        containerColor =
-                                                                MaterialTheme.colorScheme.surface
-                                                ),
-                                        elevation =
-                                                CardDefaults.cardElevation(defaultElevation = 4.dp),
-                                        shape = RoundedCornerShape(12.dp)
-                                ) {
-                                        Column(
-                                                modifier = Modifier.padding(16.dp),
-                                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                                        ) {
-                                                Text(
-                                                        text = "App Settings",
-                                                        style =
-                                                                MaterialTheme.typography
-                                                                        .headlineSmall,
-                                                        fontWeight = FontWeight.SemiBold
-                                                )
-
-                                                // Theme selection dropdown
-                                                Column(modifier = Modifier.fillMaxWidth()) {
-                                                        Text(
-                                                                text = "Theme",
-                                                                style =
-                                                                        MaterialTheme.typography
-                                                                                .labelMedium,
-                                                                color =
-                                                                        MaterialTheme.colorScheme
-                                                                                .onSurfaceVariant
-                                                        )
-                                                        Spacer(modifier = Modifier.height(8.dp))
-
-                                                        ThemeDropdown(
-                                                                selectedTheme = uiState.themeMode,
-                                                                onThemeSelected =
-                                                                        viewModel::updateThemeMode
-                                                        )
-                                                }
-
-                                                Spacer(modifier = Modifier.height(4.dp))
-
-                                                Row(
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        horizontalArrangement =
-                                                                Arrangement.SpaceBetween,
-                                                        verticalAlignment =
-                                                                Alignment.CenterVertically
-                                                ) {
-                                                        Text(
-                                                                text = "Enable Notifications",
-                                                                style =
-                                                                        MaterialTheme.typography
-                                                                                .bodyMedium
-                                                        )
-                                                        Switch(
-                                                                checked =
-                                                                        uiState.notificationsEnabled,
-                                                                onCheckedChange = { enabled ->
-                                                                        viewModel
-                                                                                .updateNotificationsEnabled(
-                                                                                        enabled
-                                                                                )
-                                                                }
-                                                        )
-                                                }
-                                        }
-                                }
-                        }
-
-                        item {
-                                Card(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        colors =
-                                                CardDefaults.cardColors(
-                                                        containerColor =
-                                                                MaterialTheme.colorScheme.surface
-                                                ),
-                                        elevation =
-                                                CardDefaults.cardElevation(defaultElevation = 4.dp),
-                                        shape = RoundedCornerShape(12.dp)
-                                ) {
-                                        Column(
-                                                modifier = Modifier.padding(16.dp),
-                                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                                        ) {
-                                                Text(
-                                                        text = "Traffic Quota & Regulations",
-                                                        style =
-                                                                MaterialTheme.typography
-                                                                        .headlineSmall,
-                                                        fontWeight = FontWeight.SemiBold
-                                                )
-
-                                                Text(
-                                                        text =
-                                                                "Limit bandwidth usage per client. Quotas are shared equally among all connected clients.",
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color =
-                                                                MaterialTheme.colorScheme
-                                                                        .onSurfaceVariant
-                                                )
-
-                                                // Enable Quota Toggle
-                                                Row(
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        horizontalArrangement =
-                                                                Arrangement.SpaceBetween,
-                                                        verticalAlignment =
-                                                                Alignment.CenterVertically
-                                                ) {
-                                                        Column(modifier = Modifier.weight(1f)) {
-                                                                Text(
-                                                                        text =
-                                                                                "Enable Traffic Quota",
-                                                                        style =
-                                                                                MaterialTheme
-                                                                                        .typography
-                                                                                        .bodyMedium,
-                                                                        fontWeight =
-                                                                                FontWeight.Medium
-                                                                )
-                                                                Text(
-                                                                        text =
-                                                                                if (uiState.quotaEnabled &&
-                                                                                                uiState.quotaTotalBandwidthMb >
-                                                                                                        0
-                                                                                ) {
-                                                                                        "${uiState.quotaTotalBandwidthMb} MB total, ${uiState.quotaBlockDurationHours}h block"
-                                                                                } else {
-                                                                                        "Limit bandwidth usage per client"
-                                                                                },
-                                                                        style =
-                                                                                MaterialTheme
-                                                                                        .typography
-                                                                                        .bodySmall,
-                                                                        color =
-                                                                                MaterialTheme
-                                                                                        .colorScheme
-                                                                                        .onSurfaceVariant
-                                                                )
-                                                        }
-                                                        Switch(
-                                                                checked = uiState.quotaEnabled,
-                                                                onCheckedChange = { enabled ->
-                                                                        viewModel
-                                                                                .updateQuotaEnabled(
-                                                                                        enabled
-                                                                                )
-                                                                }
-                                                        )
-                                                }
-
-                                                // Quota Mode Selection (only show when enabled)
-                                                if (uiState.quotaEnabled) {
-                                                        Divider()
-
-                                                        Row(
-                                                                modifier = Modifier.fillMaxWidth(),
-                                                                horizontalArrangement =
-                                                                        Arrangement.SpaceBetween,
-                                                                verticalAlignment =
-                                                                        Alignment.CenterVertically
-                                                        ) {
-                                                                // Left side: Quota Mode radio
-                                                                // buttons
-                                                                Column(
-                                                                        modifier =
-                                                                                Modifier.weight(1f)
-                                                                ) {
-                                                                        Text(
-                                                                                text =
-                                                                                        "Quota Mode:",
-                                                                                style =
-                                                                                        MaterialTheme
-                                                                                                .typography
-                                                                                                .labelMedium,
-                                                                                color =
-                                                                                        MaterialTheme
-                                                                                                .colorScheme
-                                                                                                .onSurfaceVariant
-                                                                        )
-
-                                                                        Spacer(
-                                                                                modifier =
-                                                                                        Modifier.height(
-                                                                                                8.dp
-                                                                                        )
-                                                                        )
-
-                                                                        // Dynamic mode radio button
-                                                                        Row(
-                                                                                modifier =
-                                                                                        Modifier.fillMaxWidth()
-                                                                                                .clickable {
-                                                                                                        viewModel
-                                                                                                                .updateQuotaMode(
-                                                                                                                        "dynamic"
-                                                                                                                )
-                                                                                                        showQuotaConfigDialog =
-                                                                                                                true
-                                                                                                }
-                                                                                                .padding(
-                                                                                                        vertical =
-                                                                                                                4.dp
-                                                                                                ),
-                                                                                verticalAlignment =
-                                                                                        Alignment
-                                                                                                .CenterVertically
-                                                                        ) {
-                                                                                RadioButton(
-                                                                                        selected =
-                                                                                                uiState.quotaMode ==
-                                                                                                        "dynamic",
-                                                                                        onClick = {
-                                                                                                viewModel
-                                                                                                        .updateQuotaMode(
-                                                                                                                "dynamic"
-                                                                                                        )
-                                                                                                showQuotaConfigDialog =
-                                                                                                        true
-                                                                                        }
-                                                                                )
-                                                                                Text(
-                                                                                        text =
-                                                                                                "Dynamic (divide total equally)",
-                                                                                        style =
-                                                                                                MaterialTheme
-                                                                                                        .typography
-                                                                                                        .bodySmall,
-                                                                                        modifier =
-                                                                                                Modifier.padding(
-                                                                                                        start =
-                                                                                                                8.dp
-                                                                                                )
-                                                                                )
-                                                                        }
-
-                                                                        // Fixed mode radio button
-                                                                        Row(
-                                                                                modifier =
-                                                                                        Modifier.fillMaxWidth()
-                                                                                                .clickable {
-                                                                                                        viewModel
-                                                                                                                .updateQuotaMode(
-                                                                                                                        "fixed"
-                                                                                                                )
-                                                                                                        showFixedQuotaConfigDialog =
-                                                                                                                true
-                                                                                                }
-                                                                                                .padding(
-                                                                                                        vertical =
-                                                                                                                4.dp
-                                                                                                ),
-                                                                                verticalAlignment =
-                                                                                        Alignment
-                                                                                                .CenterVertically
-                                                                        ) {
-                                                                                RadioButton(
-                                                                                        selected =
-                                                                                                uiState.quotaMode ==
-                                                                                                        "fixed",
-                                                                                        onClick = {
-                                                                                                viewModel
-                                                                                                        .updateQuotaMode(
-                                                                                                                "fixed"
-                                                                                                        )
-                                                                                                showFixedQuotaConfigDialog =
-                                                                                                        true
-                                                                                        }
-                                                                                )
-                                                                                Text(
-                                                                                        text =
-                                                                                                "Fixed per client",
-                                                                                        style =
-                                                                                                MaterialTheme
-                                                                                                        .typography
-                                                                                                        .bodySmall,
-                                                                                        modifier =
-                                                                                                Modifier.padding(
-                                                                                                        start =
-                                                                                                                8.dp
-                                                                                                )
-                                                                                )
-                                                                        }
-                                                                }
-
-                                                                // Right side: Advanced button (red
-                                                                // background)
-                                                                Button(
-                                                                        onClick = {
-                                                                                navController
-                                                                                        ?.navigate(
-                                                                                                "advanced-traffic-regulation"
-                                                                                        )
-                                                                        },
-                                                                        shape =
-                                                                                RoundedCornerShape(
-                                                                                        8.dp
-                                                                                ),
-                                                                        colors =
-                                                                                ButtonDefaults
-                                                                                        .buttonColors(
-                                                                                                containerColor =
-                                                                                                        MaterialTheme
-                                                                                                                .colorScheme
-                                                                                                                .error
-                                                                                        ),
-                                                                        enabled =
-                                                                                navController !=
-                                                                                        null,
-                                                                        modifier =
-                                                                                Modifier.padding(
-                                                                                        start = 8.dp
-                                                                                )
-                                                                ) { Text("Advanced") }
-                                                        }
-                                                }
-                                        }
-                                }
-                        }
-
-                        item {
-                                Card(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        colors =
-                                                CardDefaults.cardColors(
-                                                        containerColor =
-                                                                MaterialTheme.colorScheme.surface
-                                                ),
-                                        elevation =
-                                                CardDefaults.cardElevation(defaultElevation = 4.dp),
-                                        shape = RoundedCornerShape(12.dp)
-                                ) {
-                                        Column(
-                                                modifier = Modifier.padding(16.dp),
-                                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                                        ) {
-                                                Text(
-                                                        text = "Data Management",
-                                                        style =
-                                                                MaterialTheme.typography
-                                                                        .headlineSmall,
-                                                        fontWeight = FontWeight.SemiBold
-                                                )
-
-                                                Text(
-                                                        text =
-                                                                "Clear all stored traffic data from the database. This action cannot be undone.",
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color =
-                                                                MaterialTheme.colorScheme
-                                                                        .onSurfaceVariant
-                                                )
-
-                                                // Device Idle Timeout Setting
-                                                Divider(
-                                                        modifier = Modifier.padding(vertical = 8.dp)
-                                                )
-
-                                                Text(
-                                                        text = "Device Idle Timeout",
-                                                        style = MaterialTheme.typography.bodyMedium,
-                                                        fontWeight = FontWeight.Medium
-                                                )
-
-                                                Text(
-                                                        text =
-                                                                "Devices inactive longer than this duration will be removed from real-time monitoring. Historical data remains in storage.",
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color =
-                                                                MaterialTheme.colorScheme
-                                                                        .onSurfaceVariant
-                                                )
-
-                                                Row(
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        horizontalArrangement =
-                                                                Arrangement.spacedBy(12.dp),
-                                                        verticalAlignment =
-                                                                Alignment.CenterVertically
-                                                ) {
-                                                        Slider(
-                                                                value =
-                                                                        uiState.deviceIdleTimeoutMinutes
-                                                                                .toFloat(),
-                                                                onValueChange = { value ->
-                                                                        viewModel
-                                                                                .updateDeviceIdleTimeoutMinutes(
-                                                                                        value.toInt()
-                                                                                )
-                                                                },
-                                                                valueRange = 1f..60f,
-                                                                steps = 58, // 1-minute steps from 1
-                                                                // to 60
-                                                                modifier = Modifier.weight(1f)
-                                                        )
-                                                        Text(
-                                                                text =
-                                                                        "${uiState.deviceIdleTimeoutMinutes} min",
-                                                                style =
-                                                                        MaterialTheme.typography
-                                                                                .bodyMedium,
-                                                                modifier = Modifier.width(60.dp),
-                                                                fontWeight = FontWeight.Medium
-                                                        )
-                                                }
-
-                                                Button(
-                                                        onClick = {
-                                                                showClearConfirmationDialog = true
-                                                        },
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        shape = RoundedCornerShape(8.dp),
-                                                        colors =
-                                                                ButtonDefaults.buttonColors(
-                                                                        containerColor =
-                                                                                MaterialTheme
-                                                                                        .colorScheme
-                                                                                        .error
-                                                                ),
-                                                        enabled = !uiState.isClearingDatabase
-                                                ) {
-                                                        if (uiState.isClearingDatabase) {
-                                                                CircularProgressIndicator(
-                                                                        modifier =
-                                                                                Modifier.size(
-                                                                                        20.dp
-                                                                                ),
-                                                                        color =
-                                                                                MaterialTheme
-                                                                                        .colorScheme
-                                                                                        .onError,
-                                                                        strokeWidth = 2.dp
-                                                                )
-                                                                Spacer(
-                                                                        modifier =
-                                                                                Modifier.width(8.dp)
-                                                                )
-                                                                Text("Clearing...")
-                                                        } else {
-                                                                Icon(
-                                                                        imageVector =
-                                                                                Icons.Default
-                                                                                        .Delete,
-                                                                        contentDescription = null,
-                                                                        modifier =
-                                                                                Modifier.size(20.dp)
-                                                                )
-                                                                Spacer(
-                                                                        modifier =
-                                                                                Modifier.width(8.dp)
-                                                                )
-                                                                Text("Clear Traffic Data")
-                                                        }
-                                                }
-                                        }
-                                }
-                        }
-
-                        item {
-                                Button(
-                                        onClick = {
-                                                viewModel.saveSettings()
-                                                onThemeChanged() // Trigger theme reload after
-                                                // saving
-                                        },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        shape = RoundedCornerShape(12.dp)
-                                ) { Text("Save Settings") }
-                        }
-                }
-        }
-
-        // Quota configuration dialog
+    // Auto-detect bandwidth when dialog opens (if not already set)
+    LaunchedEffect(showQuotaConfigDialog) {
         if (showQuotaConfigDialog) {
-                AlertDialog(
-                        onDismissRequest = { showQuotaConfigDialog = false },
-                        title = {
-                                Text(
-                                        text = "Configure Traffic Quota",
-                                        style = MaterialTheme.typography.titleLarge,
-                                        fontWeight = FontWeight.Bold
-                                )
-                        },
-                        text = {
-                                Column(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                                ) {
-                                        Text(
-                                                text =
-                                                        "Quotas are shared equally among all connected clients (including host).",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-
-                                        OutlinedTextField(
-                                                value = quotaBandwidthText,
-                                                onValueChange = { quotaBandwidthText = it },
-                                                label = { Text("Total Bandwidth (MB)") },
-                                                placeholder = {
-                                                        Text("Auto-detected or enter manually")
-                                                },
-                                                modifier = Modifier.fillMaxWidth(),
-                                                supportingText = {
-                                                        Text(
-                                                                if (quotaBandwidthText.isEmpty()) {
-                                                                        "Bandwidth will be auto-detected when dialog opens"
-                                                                } else {
-                                                                        "Total bandwidth to share among all clients (auto-detected, you can change it)"
-                                                                }
-                                                        )
-                                                },
-                                                singleLine = true
-                                        )
-
-                                        OutlinedTextField(
-                                                value = quotaBlockHoursText,
-                                                onValueChange = { quotaBlockHoursText = it },
-                                                label = { Text("Block Duration (Hours)") },
-                                                modifier = Modifier.fillMaxWidth(),
-                                                supportingText = {
-                                                        Text(
-                                                                "How long to block clients after quota exceeded (0 = no blocking, 1-168 hours)"
-                                                        )
-                                                },
-                                                singleLine = true
-                                        )
-                                }
-                        },
-                        confirmButton = {
-                                Button(
-                                        onClick = {
-                                                val bandwidth =
-                                                        quotaBandwidthText.toLongOrNull() ?: 0
-                                                val blockHours =
-                                                        quotaBlockHoursText.toIntOrNull() ?: 0
-                                                if (bandwidth > 0 &&
-                                                                blockHours >= 0 &&
-                                                                blockHours <= 168
-                                                ) {
-                                                        viewModel.updateQuotaSettings(
-                                                                bandwidth,
-                                                                blockHours
-                                                        )
-                                                        showQuotaConfigDialog = false
-                                                }
-                                        },
-                                        enabled =
-                                                quotaBandwidthText.toLongOrNull()?.let { it > 0 } ==
-                                                        true &&
-                                                        quotaBlockHoursText.toIntOrNull()?.let {
-                                                                it in 0..168
-                                                        } == true
-                                ) { Text("Save") }
-                        },
-                        dismissButton = {
-                                TextButton(onClick = { showQuotaConfigDialog = false }) {
-                                        Text("Cancel")
-                                }
-                        },
-                        containerColor = MaterialTheme.colorScheme.surface
-                )
+            // If user already has a value, use it; otherwise auto-detect
+            if (uiState.quotaTotalBandwidthMb > 0) {
+                quotaBandwidthText = uiState.quotaTotalBandwidthMb.toString()
+            } else {
+                // Auto-detect bandwidth
+                val detected = viewModel.detectBandwidth()
+                quotaBandwidthText = detected?.toString() ?: ""
+            }
+            quotaBlockHoursText = uiState.quotaBlockDurationHours.toString()
         }
+    }
 
-        // Fixed Quota Configuration Dialog
+    // Load fixed quota values when that dialog opens
+    LaunchedEffect(showFixedQuotaConfigDialog) {
         if (showFixedQuotaConfigDialog) {
-                AlertDialog(
-                        onDismissRequest = { showFixedQuotaConfigDialog = false },
-                        title = {
+            if (uiState.quotaFixedPerClientMb > 0) {
+                fixedQuotaPerClientText = uiState.quotaFixedPerClientMb.toString()
+            }
+            fixedQuotaBlockHoursText = uiState.quotaBlockDurationHours.toString()
+        }
+    }
+
+    // Show validation error snackbar
+    LaunchedEffect(uiState.validationError) {
+        uiState.validationError?.let { error ->
+            snackbarHostState.showSnackbar(
+                message = error,
+                duration = SnackbarDuration.Short
+            )
+        }
+    }
+
+    // Show clear database success snackbar
+    LaunchedEffect(uiState.clearDatabaseSuccess) {
+        if (uiState.clearDatabaseSuccess) {
+            snackbarHostState.showSnackbar(
+                message = "Traffic data cleared successfully",
+                duration = SnackbarDuration.Short
+            )
+            viewModel.resetClearDatabaseState()
+        }
+    }
+
+    // Show clear database error snackbar
+    LaunchedEffect(uiState.clearDatabaseError) {
+        uiState.clearDatabaseError?.let { error ->
+            snackbarHostState.showSnackbar(
+                message = error,
+                duration = SnackbarDuration.Long
+            )
+            viewModel.resetClearDatabaseState()
+        }
+    }
+
+    Scaffold(snackbarHost = { SnackbarHost(snackbarHostState) }) { paddingValues ->
+        LazyColumn(
+            modifier =
+                Modifier
+                        .fillMaxSize()
+                        .padding(paddingValues)
+                        .background(MaterialTheme.colorScheme.background)
+                        .padding(horizontal = 12.dp)
+                        .padding(top = 12.dp)
+                        .padding(bottom = 6.dp)
+                        .safeDrawingPadding(),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors =
+                        CardDefaults.cardColors(
+                            containerColor =
+                                MaterialTheme.colorScheme.surface
+                        ),
+                    elevation =
+                        CardDefaults.cardElevation(defaultElevation = 4.dp),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "Proxy Settings",
+                            style =
+                                MaterialTheme.typography
+                                    .headlineSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+
+                        Text(
+                            text =
+                                "Note: Restart proxy server for changes to take effect",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+
+                        // HTTP/HTTPS Proxy Toggle
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement =
+                                Arrangement.SpaceBetween,
+                            verticalAlignment =
+                                Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                        text = "Configure Fixed Quota",
-                                        style = MaterialTheme.typography.titleLarge,
-                                        fontWeight = FontWeight.Bold
+                                    text = "HTTP/HTTPS Proxy",
+                                    style =
+                                        MaterialTheme
+                                            .typography
+                                            .bodyMedium,
+                                    fontWeight =
+                                        FontWeight.Medium
                                 )
-                        },
-                        text = {
+                                Text(
+                                    text =
+                                        "Port ${ProxyPortManager.HTTP_PORT}",
+                                    style =
+                                        MaterialTheme
+                                            .typography
+                                            .bodySmall,
+                                    color =
+                                        MaterialTheme
+                                            .colorScheme
+                                            .onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = uiState.httpHttpsEnabled,
+                                onCheckedChange = { enabled ->
+                                    viewModel
+                                        .updateHttpHttpsEnabled(
+                                            enabled
+                                        )
+                                },
+                                enabled =
+                                    uiState.socks5Enabled ||
+                                            !uiState.httpHttpsEnabled // Disable only when
+                                // SOCKS5 is off and
+                                // HTTP/HTTPS is on
+                            )
+                        }
+
+                        // SOCKS5 Proxy Toggle
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement =
+                                Arrangement.SpaceBetween,
+                            verticalAlignment =
+                                Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "SOCKS5 Proxy",
+                                    style =
+                                        MaterialTheme
+                                            .typography
+                                            .bodyMedium,
+                                    fontWeight =
+                                        FontWeight.Medium
+                                )
+                                Text(
+                                    text =
+                                        "Port ${ProxyPortManager.SOCKS5_PORT}",
+                                    style =
+                                        MaterialTheme
+                                            .typography
+                                            .bodySmall,
+                                    color =
+                                        MaterialTheme
+                                            .colorScheme
+                                            .onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = uiState.socks5Enabled,
+                                onCheckedChange = { enabled ->
+                                    viewModel
+                                        .updateSocks5Enabled(
+                                            enabled
+                                        )
+                                },
+                                enabled =
+                                    uiState.httpHttpsEnabled ||
+                                            !uiState.socks5Enabled // Disable only when
+                                // HTTP/HTTPS is off and
+                                // SOCKS5 is on
+                            )
+                        }
+
+                        Divider()
+
+                        // Authentication Toggle
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement =
+                                Arrangement.SpaceBetween,
+                            verticalAlignment =
+                                Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Enable Authentication",
+                                style =
+                                    MaterialTheme.typography
+                                        .bodyMedium
+                            )
+                            Switch(
+                                checked = uiState.authEnabled,
+                                onCheckedChange = { enabled ->
+                                    viewModel.updateAuthEnabled(
+                                        enabled
+                                    )
+                                }
+                            )
+                        }
+
+                        if (uiState.authEnabled) {
+                            OutlinedTextField(
+                                value = uiState.authUsername,
+                                onValueChange = {
+                                    viewModel
+                                        .updateAuthUsername(
+                                            it
+                                        )
+                                },
+                                label = { Text("Proxy Username") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                            OutlinedTextField(
+                                value = uiState.authPassword,
+                                onValueChange = {
+                                    viewModel
+                                        .updateAuthPassword(
+                                            it
+                                        )
+                                },
+                                label = { Text("Proxy Password") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                visualTransformation =
+                                    PasswordVisualTransformation(),
+                                keyboardOptions =
+                                    KeyboardOptions(
+                                        keyboardType =
+                                            KeyboardType
+                                                .Password
+                                    )
+                            )
+                            Text(
+                                text =
+                                    "Credentials are stored securely on this device. Share them with clients that should use the proxy.",
+                                style =
+                                    MaterialTheme.typography
+                                        .bodySmall,
+                                color =
+                                    MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors =
+                        CardDefaults.cardColors(
+                            containerColor =
+                                MaterialTheme.colorScheme.surface
+                        ),
+                    elevation =
+                        CardDefaults.cardElevation(defaultElevation = 4.dp),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "App Settings",
+                            style =
+                                MaterialTheme.typography
+                                    .headlineSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+
+                        // Theme selection dropdown
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                text = "Theme",
+                                style =
+                                    MaterialTheme.typography
+                                        .labelMedium,
+                                color =
+                                    MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            ThemeDropdown(
+                                selectedTheme = uiState.themeMode,
+                                onThemeSelected =
+                                    viewModel::updateThemeMode
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement =
+                                Arrangement.SpaceBetween,
+                            verticalAlignment =
+                                Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Enable Notifications",
+                                style =
+                                    MaterialTheme.typography
+                                        .bodyMedium
+                            )
+                            Switch(
+                                checked =
+                                    uiState.notificationsEnabled,
+                                onCheckedChange = { enabled ->
+                                    viewModel
+                                        .updateNotificationsEnabled(
+                                            enabled
+                                        )
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors =
+                        CardDefaults.cardColors(
+                            containerColor =
+                                MaterialTheme.colorScheme.surface
+                        ),
+                    elevation =
+                        CardDefaults.cardElevation(defaultElevation = 4.dp),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "Traffic Quota & Regulations",
+                            style =
+                                MaterialTheme.typography
+                                    .headlineSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+
+                        Text(
+                            text =
+                                "Limit bandwidth usage per client. Quotas are shared equally among all connected clients.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color =
+                                MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                        )
+
+                        // Enable Quota Toggle
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement =
+                                Arrangement.SpaceBetween,
+                            verticalAlignment =
+                                Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text =
+                                        "Enable Traffic Quota",
+                                    style =
+                                        MaterialTheme
+                                            .typography
+                                            .bodyMedium,
+                                    fontWeight =
+                                        FontWeight.Medium
+                                )
+                                Text(
+                                    text =
+                                        if (uiState.quotaEnabled &&
+                                            uiState.quotaTotalBandwidthMb >
+                                            0
+                                        ) {
+                                            "${uiState.quotaTotalBandwidthMb} MB total, ${uiState.quotaBlockDurationHours}h block"
+                                        } else {
+                                            "Limit bandwidth usage per client"
+                                        },
+                                    style =
+                                        MaterialTheme
+                                            .typography
+                                            .bodySmall,
+                                    color =
+                                        MaterialTheme
+                                            .colorScheme
+                                            .onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = uiState.quotaEnabled,
+                                onCheckedChange = { enabled ->
+                                    viewModel
+                                        .updateQuotaEnabled(
+                                            enabled
+                                        )
+                                }
+                            )
+                        }
+
+                        // Quota Mode Selection (only show when enabled)
+                        if (uiState.quotaEnabled) {
+                            Divider()
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement =
+                                    Arrangement.SpaceBetween,
+                                verticalAlignment =
+                                    Alignment.CenterVertically
+                            ) {
+                                // Left side: Quota Mode radio
+                                // buttons
                                 Column(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                                    modifier =
+                                        Modifier.weight(1f)
                                 ) {
-                                        Text(
-                                                text =
-                                                        "Each client gets a fixed quota regardless of how many connect.",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-
-                                        OutlinedTextField(
-                                                value = fixedQuotaPerClientText,
-                                                onValueChange = { fixedQuotaPerClientText = it },
-                                                label = { Text("Quota per Client (MB)") },
-                                                placeholder = { Text("e.g., 500") },
-                                                modifier = Modifier.fillMaxWidth(),
-                                                supportingText = {
-                                                        Text(
-                                                                "Each client will receive exactly this amount"
-                                                        )
-                                                },
-                                                singleLine = true
-                                        )
-
-                                        OutlinedTextField(
-                                                value = fixedQuotaBlockHoursText,
-                                                onValueChange = { fixedQuotaBlockHoursText = it },
-                                                label = { Text("Block Duration (Hours)") },
-                                                modifier = Modifier.fillMaxWidth(),
-                                                supportingText = {
-                                                        Text(
-                                                                "How long to block clients after quota exceeded (0 = no blocking, 1-168 hours)"
-                                                        )
-                                                },
-                                                singleLine = true
-                                        )
-                                }
-                        },
-                        confirmButton = {
-                                Button(
-                                        onClick = {
-                                                val quotaPerClient =
-                                                        fixedQuotaPerClientText.toLongOrNull() ?: 0
-                                                val blockHours =
-                                                        fixedQuotaBlockHoursText.toIntOrNull() ?: 1
-                                                if (quotaPerClient > 0 &&
-                                                                blockHours >= 0 &&
-                                                                blockHours <= 168
-                                                ) {
-                                                        viewModel.updateFixedQuotaSettings(
-                                                                quotaPerClient,
-                                                                blockHours
-                                                        )
-                                                        showFixedQuotaConfigDialog = false
-                                                }
-                                        },
-                                        enabled =
-                                                fixedQuotaPerClientText.toLongOrNull()?.let {
-                                                        it > 0
-                                                } == true &&
-                                                        fixedQuotaBlockHoursText.toIntOrNull()
-                                                                ?.let { it in 0..168 } == true
-                                ) { Text("Save") }
-                        },
-                        dismissButton = {
-                                TextButton(onClick = { showFixedQuotaConfigDialog = false }) {
-                                        Text("Cancel")
-                                }
-                        },
-                        containerColor = MaterialTheme.colorScheme.surface
-                )
-        }
-
-        // Confirmation dialog for clearing database
-        if (showClearConfirmationDialog) {
-                AlertDialog(
-                        onDismissRequest = { showClearConfirmationDialog = false },
-                        title = {
-                                Text(
-                                        text = "Clear Traffic Data",
-                                        style = MaterialTheme.typography.titleLarge,
-                                        fontWeight = FontWeight.Bold
-                                )
-                        },
-                        text = {
-                                Text(
+                                    Text(
                                         text =
-                                                "Are you sure you want to delete all traffic data? This will permanently remove:\n\n" +
-                                                        "• All traffic records\n" +
-                                                        "• All session history\n" +
-                                                        "• All client statistics\n\n" +
-                                                        "This action cannot be undone.",
-                                        style = MaterialTheme.typography.bodyMedium
-                                )
-                        },
-                        confirmButton = {
-                                Button(
-                                        onClick = {
-                                                showClearConfirmationDialog = false
-                                                viewModel.clearTrafficData()
-                                        },
-                                        colors =
-                                                ButtonDefaults.buttonColors(
-                                                        containerColor =
-                                                                MaterialTheme.colorScheme.error
+                                            "Quota Mode:",
+                                        style =
+                                            MaterialTheme
+                                                .typography
+                                                .labelMedium,
+                                        color =
+                                            MaterialTheme
+                                                .colorScheme
+                                                .onSurfaceVariant
+                                    )
+
+                                    Spacer(
+                                        modifier =
+                                            Modifier.height(
+                                                8.dp
+                                            )
+                                    )
+
+                                    // Dynamic mode radio button
+                                    Row(
+                                        modifier =
+                                            Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable {
+                                                            viewModel
+                                                                    .updateQuotaMode(
+                                                                            "dynamic"
+                                                                    )
+                                                            showQuotaConfigDialog =
+                                                                    true
+                                                    }
+                                                    .padding(
+                                                            vertical =
+                                                                    4.dp
+                                                    ),
+                                        verticalAlignment =
+                                            Alignment
+                                                .CenterVertically
+                                    ) {
+                                        RadioButton(
+                                            selected =
+                                                uiState.quotaMode ==
+                                                        "dynamic",
+                                            onClick = {
+                                                viewModel
+                                                    .updateQuotaMode(
+                                                        "dynamic"
+                                                    )
+                                                showQuotaConfigDialog =
+                                                    true
+                                            }
+                                        )
+                                        Text(
+                                            text =
+                                                "Dynamic (divide total equally)",
+                                            style =
+                                                MaterialTheme
+                                                    .typography
+                                                    .bodySmall,
+                                            modifier =
+                                                Modifier.padding(
+                                                    start =
+                                                        8.dp
                                                 )
-                                ) { Text("Clear All Data") }
-                        },
-                        dismissButton = {
-                                TextButton(onClick = { showClearConfirmationDialog = false }) {
-                                        Text("Cancel")
+                                        )
+                                    }
+
+                                    // Fixed mode radio button
+                                    Row(
+                                        modifier =
+                                            Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable {
+                                                            viewModel
+                                                                    .updateQuotaMode(
+                                                                            "fixed"
+                                                                    )
+                                                            showFixedQuotaConfigDialog =
+                                                                    true
+                                                    }
+                                                    .padding(
+                                                            vertical =
+                                                                    4.dp
+                                                    ),
+                                        verticalAlignment =
+                                            Alignment
+                                                .CenterVertically
+                                    ) {
+                                        RadioButton(
+                                            selected =
+                                                uiState.quotaMode ==
+                                                        "fixed",
+                                            onClick = {
+                                                viewModel
+                                                    .updateQuotaMode(
+                                                        "fixed"
+                                                    )
+                                                showFixedQuotaConfigDialog =
+                                                    true
+                                            }
+                                        )
+                                        Text(
+                                            text =
+                                                "Fixed per client",
+                                            style =
+                                                MaterialTheme
+                                                    .typography
+                                                    .bodySmall,
+                                            modifier =
+                                                Modifier.padding(
+                                                    start =
+                                                        8.dp
+                                                )
+                                        )
+                                    }
                                 }
-                        },
-                        containerColor = MaterialTheme.colorScheme.surface
-                )
+
+                                // Right side: Advanced button (red
+                                // background)
+                                Button(
+                                    onClick = {
+                                        navController
+                                            ?.navigate(
+                                                "advanced-traffic-regulation"
+                                            )
+                                    },
+                                    shape =
+                                        RoundedCornerShape(
+                                            8.dp
+                                        ),
+                                    colors =
+                                        ButtonDefaults
+                                            .buttonColors(
+                                                containerColor =
+                                                    MaterialTheme
+                                                        .colorScheme
+                                                        .error
+                                            ),
+                                    enabled =
+                                        navController !=
+                                                null,
+                                    modifier =
+                                        Modifier.padding(
+                                            start = 8.dp
+                                        )
+                                ) { Text("Advanced") }
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors =
+                        CardDefaults.cardColors(
+                            containerColor =
+                                MaterialTheme.colorScheme.surface
+                        ),
+                    elevation =
+                        CardDefaults.cardElevation(defaultElevation = 4.dp),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "Data Management",
+                            style =
+                                MaterialTheme.typography
+                                    .headlineSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+
+                        Text(
+                            text =
+                                "Clear all stored traffic data from the database. This action cannot be undone.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color =
+                                MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                        )
+
+                        // Device Idle Timeout Setting
+                        Divider(
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        Text(
+                            text = "Device Idle Timeout",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+
+                        Text(
+                            text =
+                                "Devices inactive longer than this duration will be removed from real-time monitoring. Historical data remains in storage.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color =
+                                MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement =
+                                Arrangement.spacedBy(12.dp),
+                            verticalAlignment =
+                                Alignment.CenterVertically
+                        ) {
+                            Slider(
+                                value =
+                                    uiState.deviceIdleTimeoutMinutes
+                                        .toFloat(),
+                                onValueChange = { value ->
+                                    viewModel
+                                        .updateDeviceIdleTimeoutMinutes(
+                                            value.toInt()
+                                        )
+                                },
+                                valueRange = 1f..60f,
+                                steps = 58, // 1-minute steps from 1
+                                // to 60
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text =
+                                    "${uiState.deviceIdleTimeoutMinutes} min",
+                                style =
+                                    MaterialTheme.typography
+                                        .bodyMedium,
+                                modifier = Modifier.width(60.dp),
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+
+                        Button(
+                            onClick = {
+                                showClearConfirmationDialog = true
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp),
+                            colors =
+                                ButtonDefaults.buttonColors(
+                                    containerColor =
+                                        MaterialTheme
+                                            .colorScheme
+                                            .error
+                                ),
+                            enabled = !uiState.isClearingDatabase
+                        ) {
+                            if (uiState.isClearingDatabase) {
+                                CircularProgressIndicator(
+                                    modifier =
+                                        Modifier.size(
+                                            20.dp
+                                        ),
+                                    color =
+                                        MaterialTheme
+                                            .colorScheme
+                                            .onError,
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(
+                                    modifier =
+                                        Modifier.width(8.dp)
+                                )
+                                Text("Clearing...")
+                            } else {
+                                Icon(
+                                    imageVector =
+                                        Icons.Default
+                                            .Delete,
+                                    contentDescription = null,
+                                    modifier =
+                                        Modifier.size(20.dp)
+                                )
+                                Spacer(
+                                    modifier =
+                                        Modifier.width(8.dp)
+                                )
+                                Text("Clear Traffic Data")
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                Button(
+                    onClick = {
+                        viewModel.saveSettings()
+                        onThemeChanged() // Trigger theme reload after
+                        // saving
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) { Text("Save Settings") }
+            }
         }
+    }
+
+    // Quota configuration dialog
+    if (showQuotaConfigDialog) {
+        AlertDialog(
+            onDismissRequest = { showQuotaConfigDialog = false },
+            title = {
+                Text(
+                    text = "Configure Traffic Quota",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text(
+                        text =
+                            "Quotas are shared equally among all connected clients (including host).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedTextField(
+                        value = quotaBandwidthText,
+                        onValueChange = { quotaBandwidthText = it },
+                        label = { Text("Total Bandwidth (MB)") },
+                        placeholder = {
+                            Text("Auto-detected or enter manually")
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        supportingText = {
+                            Text(
+                                if (quotaBandwidthText.isEmpty()) {
+                                    "Bandwidth will be auto-detected when dialog opens"
+                                } else {
+                                    "Total bandwidth to share among all clients (auto-detected, you can change it)"
+                                }
+                            )
+                        },
+                        singleLine = true
+                    )
+
+                    OutlinedTextField(
+                        value = quotaBlockHoursText,
+                        onValueChange = { quotaBlockHoursText = it },
+                        label = { Text("Block Duration (Hours)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        supportingText = {
+                            Text(
+                                "How long to block clients after quota exceeded (0 = no blocking, 1-168 hours)"
+                            )
+                        },
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val bandwidth =
+                            quotaBandwidthText.toLongOrNull() ?: 0
+                        val blockHours =
+                            quotaBlockHoursText.toIntOrNull() ?: 0
+                        if (bandwidth > 0 &&
+                            blockHours >= 0 &&
+                            blockHours <= 168
+                        ) {
+                            viewModel.updateQuotaSettings(
+                                bandwidth,
+                                blockHours
+                            )
+                            showQuotaConfigDialog = false
+                        }
+                    },
+                    enabled =
+                        quotaBandwidthText.toLongOrNull()?.let { it > 0 } ==
+                                true &&
+                                quotaBlockHoursText.toIntOrNull()?.let {
+                                    it in 0..168
+                                } == true
+                ) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showQuotaConfigDialog = false }) {
+                    Text("Cancel")
+                }
+            },
+            containerColor = MaterialTheme.colorScheme.surface
+        )
+    }
+
+    // Fixed Quota Configuration Dialog
+    if (showFixedQuotaConfigDialog) {
+        AlertDialog(
+            onDismissRequest = { showFixedQuotaConfigDialog = false },
+            title = {
+                Text(
+                    text = "Configure Fixed Quota",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text(
+                        text =
+                            "Each client gets a fixed quota regardless of how many connect.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedTextField(
+                        value = fixedQuotaPerClientText,
+                        onValueChange = { fixedQuotaPerClientText = it },
+                        label = { Text("Quota per Client (MB)") },
+                        placeholder = { Text("e.g., 500") },
+                        modifier = Modifier.fillMaxWidth(),
+                        supportingText = {
+                            Text(
+                                "Each client will receive exactly this amount"
+                            )
+                        },
+                        singleLine = true
+                    )
+
+                    OutlinedTextField(
+                        value = fixedQuotaBlockHoursText,
+                        onValueChange = { fixedQuotaBlockHoursText = it },
+                        label = { Text("Block Duration (Hours)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        supportingText = {
+                            Text(
+                                "How long to block clients after quota exceeded (0 = no blocking, 1-168 hours)"
+                            )
+                        },
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val quotaPerClient =
+                            fixedQuotaPerClientText.toLongOrNull() ?: 0
+                        val blockHours =
+                            fixedQuotaBlockHoursText.toIntOrNull() ?: 1
+                        if (quotaPerClient > 0 &&
+                            blockHours >= 0 &&
+                            blockHours <= 168
+                        ) {
+                            viewModel.updateFixedQuotaSettings(
+                                quotaPerClient,
+                                blockHours
+                            )
+                            showFixedQuotaConfigDialog = false
+                        }
+                    },
+                    enabled =
+                        fixedQuotaPerClientText.toLongOrNull()?.let {
+                            it > 0
+                        } == true &&
+                                fixedQuotaBlockHoursText.toIntOrNull()
+                                    ?.let { it in 0..168 } == true
+                ) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showFixedQuotaConfigDialog = false }) {
+                    Text("Cancel")
+                }
+            },
+            containerColor = MaterialTheme.colorScheme.surface
+        )
+    }
+
+    // Confirmation dialog for clearing database
+    if (showClearConfirmationDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearConfirmationDialog = false },
+            title = {
+                Text(
+                    text = "Clear Traffic Data",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text =
+                        "Are you sure you want to delete all traffic data? This will permanently remove:\n\n" +
+                                "• All traffic records\n" +
+                                "• All session history\n" +
+                                "• All client statistics\n\n" +
+                                "This action cannot be undone.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showClearConfirmationDialog = false
+                        viewModel.clearTrafficData()
+                    },
+                    colors =
+                        ButtonDefaults.buttonColors(
+                            containerColor =
+                                MaterialTheme.colorScheme.error
+                        )
+                ) { Text("Clear All Data") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearConfirmationDialog = false }) {
+                    Text("Cancel")
+                }
+            },
+            containerColor = MaterialTheme.colorScheme.surface
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ThemeDropdown(selectedTheme: ThemeMode, onThemeSelected: (ThemeMode) -> Unit) {
-        var expanded by remember { mutableStateOf(false) }
+    var expanded by remember { mutableStateOf(false) }
 
-        ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
-                OutlinedTextField(
-                        readOnly = true,
-                        value = selectedTheme.displayName,
-                        onValueChange = {},
-                        trailingIcon = {
-                                Icon(
-                                        imageVector = Icons.Default.ArrowDropDown,
-                                        contentDescription = null
-                                )
-                        },
-                        modifier = Modifier.fillMaxWidth().menuAnchor(),
-                        colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors()
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
+        OutlinedTextField(
+            readOnly = true,
+            value = selectedTheme.displayName,
+            onValueChange = {},
+            trailingIcon = {
+                Icon(
+                    imageVector = Icons.Default.ArrowDropDown,
+                    contentDescription = null
                 )
+            },
+            modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(),
+            colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors()
+        )
 
-                ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                        ThemeMode.values().forEach { theme ->
-                                DropdownMenuItem(
-                                        text = { Text(theme.displayName) },
-                                        onClick = {
-                                                onThemeSelected(theme)
-                                                expanded = false
-                                        },
-                                        contentPadding =
-                                                ExposedDropdownMenuDefaults.ItemContentPadding
-                                )
-                        }
-                }
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            ThemeMode.values().forEach { theme ->
+                DropdownMenuItem(
+                    text = { Text(theme.displayName) },
+                    onClick = {
+                        onThemeSelected(theme)
+                        expanded = false
+                    },
+                    contentPadding =
+                        ExposedDropdownMenuDefaults.ItemContentPadding
+                )
+            }
         }
+    }
 }
 
 private val ThemeMode.displayName: String
-        get() =
-                when (this) {
-                        ThemeMode.SYSTEM -> "Follow system"
-                        ThemeMode.LIGHT -> "Light"
-                        ThemeMode.DARK -> "Dark"
-                }
+    get() =
+        when (this) {
+            ThemeMode.SYSTEM -> "Follow system"
+            ThemeMode.LIGHT -> "Light"
+            ThemeMode.DARK -> "Dark"
+        }

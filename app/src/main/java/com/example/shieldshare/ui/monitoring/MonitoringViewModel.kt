@@ -36,9 +36,10 @@ class MonitoringViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(MonitoringUiState())
     val uiState: StateFlow<MonitoringUiState> = _uiState.asStateFlow()
-    
+
     // Track previous stats for speed calculation (IP -> previous bytes)
-    private val previousStats = mutableMapOf<String, Pair<Long, Long>>() // IP -> (bytesUp, bytesDown)
+    private val previousStats =
+        mutableMapOf<String, Pair<Long, Long>>() // IP -> (bytesUp, bytesDown)
     private var lastUpdateTime = System.currentTimeMillis()
     private val UPDATE_INTERVAL_MS = 3000L // 3 seconds (reduced frequency for better performance)
 
@@ -52,7 +53,7 @@ class MonitoringViewModel @Inject constructor(
                 )
             }
         }
-        
+
         // Observe service sessions from database
         // Room Flow automatically emits when data changes, so we can collect directly
         viewModelScope.launch {
@@ -61,10 +62,11 @@ class MonitoringViewModel @Inject constructor(
                 .collect { serviceSessions ->
                     val activeSession = serviceSessions.find { it.isActive }
                     val currentActiveSessionId = activeSession?.sessionId
-                    
+
                     // Detect when a new active session starts (transition from no active session to active)
-                    val newSessionStarted = previousActiveSessionId == null && currentActiveSessionId != null
-                    
+                    val newSessionStarted =
+                        previousActiveSessionId == null && currentActiveSessionId != null
+
                     if (newSessionStarted) {
                         // Clear previous stats when a new session starts to prevent showing old data
                         previousStats.clear()
@@ -80,19 +82,19 @@ class MonitoringViewModel @Inject constructor(
                     } else {
                         _uiState.value = _uiState.value.copy(serviceSessions = serviceSessions)
                     }
-                    
+
                     previousActiveSessionId = currentActiveSessionId
-                    
+
                     // Automatically update database stats when service sessions change
                     loadDatabaseStats()
                     // Reload unique IP summary when sessions change
                     loadUniqueIpTrafficSummary()
                 }
         }
-        
+
         // Load initial database statistics
         loadDatabaseStats()
-        
+
         // Load unique IP traffic summary
         loadUniqueIpTrafficSummary()
 
@@ -100,12 +102,13 @@ class MonitoringViewModel @Inject constructor(
         viewModelScope.launch {
             while (true) {
                 val currentTime = System.currentTimeMillis()
-                val timeDelta = (currentTime - lastUpdateTime).coerceAtLeast(100) // At least 100ms to avoid division by zero
+                val timeDelta =
+                    (currentTime - lastUpdateTime).coerceAtLeast(100) // At least 100ms to avoid division by zero
                 lastUpdateTime = currentTime
-                
+
                 val proxyInfo = proxyServer.getProxyInfo()
                 val allTrafficStats = trafficMeter.getCurrentStats()
-                
+
                 // Filter out host device IP from traffic stats
                 val hostIp = hotspotManager.getHotspotIpAddress()
                 val trafficStats = if (hostIp != null) {
@@ -113,7 +116,7 @@ class MonitoringViewModel @Inject constructor(
                 } else {
                     allTrafficStats
                 }
-                
+
                 // Calculate speeds for each client
                 val statsWithSpeeds = trafficStats.map { stats ->
                     val previous = previousStats[stats.ipAddress]
@@ -127,30 +130,30 @@ class MonitoringViewModel @Inject constructor(
                     } else {
                         Pair(0.0, 0.0)
                     }
-                    
+
                     // Update previous stats
                     previousStats[stats.ipAddress] = Pair(stats.totalBytesUp, stats.totalBytesDown)
-                    
+
                     // Return stats with calculated speeds
                     stats.copy(
                         currentRateUp = rateUp,
                         currentRateDown = rateDown
                     )
                 }
-                
+
                 // Clean up previous stats for clients that are no longer active
                 val activeIps = trafficStats.map { it.ipAddress }.toSet()
                 previousStats.keys.removeAll { it !in activeIps }
-                
+
                 val rawLogs = (trafficMeter as? TrafficMeterSimple)?.getRawLogs() ?: emptyList()
-                
+
                 // Calculate total traffic (excluding host device)
                 val totalBytesUp = trafficStats.sumOf { it.totalBytesUp }
                 val totalBytesDown = trafficStats.sumOf { it.totalBytesDown }
-                
+
                 // Update state - let Compose handle optimization with keys
                 val (quotaEnabled, quotaSnapshots) = buildQuotaSnapshots(statsWithSpeeds)
-                
+
                 _uiState.value = _uiState.value.copy(
                     isProxyRunning = proxyInfo.isRunning,
                     activeConnections = proxyInfo.activeConnections,
@@ -166,7 +169,7 @@ class MonitoringViewModel @Inject constructor(
             }
         }
     }
-    
+
     /**
      * Load database statistics.
      */
@@ -182,8 +185,8 @@ class MonitoringViewModel @Inject constructor(
             }
         }
     }
-    
-    
+
+
     /**
      * Load client traffic for a specific service session.
      */
@@ -199,7 +202,7 @@ class MonitoringViewModel @Inject constructor(
             }
         }
     }
-    
+
     /**
      * Load aggregated traffic summary for all unique IPs.
      */
@@ -215,21 +218,21 @@ class MonitoringViewModel @Inject constructor(
             }
         }
     }
-    
+
     fun unblockClient(clientIp: String) {
         viewModelScope.launch {
             quotaManager.unblockClient(clientIp)
             refreshQuotaSnapshots()
         }
     }
-    
+
     fun resetClientQuota(clientIp: String) {
         viewModelScope.launch {
             quotaManager.resetQuota(clientIp)
             refreshQuotaSnapshots()
         }
     }
-    
+
     private fun refreshQuotaSnapshots() {
         val currentStats = _uiState.value.trafficStats
         val (quotaEnabled, quotaSnapshots) = buildQuotaSnapshots(currentStats)
@@ -238,15 +241,15 @@ class MonitoringViewModel @Inject constructor(
             quotaSummaries = quotaSnapshots
         )
     }
-    
+
     private fun buildQuotaSnapshots(trafficStats: List<ClientTrafficStats>): Pair<Boolean, Map<String, DeviceQuotaSnapshot>> {
         if (!quotaManager.isQuotaEnabled()) {
             return false to emptyMap()
         }
-        
+
         val config = quotaManager.getConfig()
         val quotaStates = quotaManager.getAllQuotaStates()
-        
+
         val snapshots = trafficStats.mapNotNull { stats ->
             val state = quotaStates[stats.ipAddress] ?: return@mapNotNull null
             val usagePercentage = if (state.allocatedQuotaBytes > 0) {
@@ -261,10 +264,10 @@ class MonitoringViewModel @Inject constructor(
                 status = mapQuotaStatus(state, config)
             )
         }.associateBy { it.clientIp }
-        
+
         return true to snapshots
     }
-    
+
     private fun mapQuotaStatus(state: QuotaState, config: QuotaConfig): QuotaBadgeStatus {
         return when {
             config.blockDurationMs > 0 && state.isCurrentlyBlocked() -> QuotaBadgeStatus.BLOCKED

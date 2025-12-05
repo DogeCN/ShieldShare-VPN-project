@@ -35,7 +35,7 @@ class HttpProxyHandler(
 ) : ProxyHandler(clientSocket, trafficMeter) {
     companion object {
         private const val TAG = "HttpProxyHandler"
-        private const val BUFFER_SIZE = 65536 // 64KB buffer for better throughput (increased from 8KB)
+        private const val BUFFER_SIZE = 65536 // 64KB buffer for better throughput
         private const val CONNECT_METHOD = "CONNECT"
         private const val HTTP_VERSION = "HTTP/1.1"
     }
@@ -99,7 +99,6 @@ class HttpProxyHandler(
                 }
                 
                 // Set socket timeout to prevent hanging connections
-                // Reduced from 30s to 10s for faster failure detection - if client doesn't send data quickly, fail fast
                 socket.soTimeout = 10000 // 10 seconds timeout for initial request - fail fast for slow/stuck connections
                 
                 // Process requests - handle keep-alive for HTTP, but CONNECT requests close the connection
@@ -372,10 +371,7 @@ class HttpProxyHandler(
 
         // Track target host for session
         hostsAccessed.add(host)
-        // (trafficMeter as? TrafficMeterSimple)?.updateSessionTarget(sessionId, host) //
 
-        // CRITICAL FIX: Establish target connection BEFORE sending 200 OK
-        // This prevents protocol violation if connection fails
         val connectTargetStartTime = System.currentTimeMillis()
         val targetSocket = try {
             connectTarget(host, port)
@@ -456,7 +452,6 @@ class HttpProxyHandler(
                         val downloadStartTime = System.currentTimeMillis()
                         val downloadThread = Thread.currentThread().name
                         Log.d(TAG, "[PERF] Starting DOWNLOAD tunnel for $host:$port | Thread: $downloadThread")
-                        // target -> client (download)
                         tunnelData(
                             input = targetSocket.getInputStream(),
                             output = socket.getOutputStream(),

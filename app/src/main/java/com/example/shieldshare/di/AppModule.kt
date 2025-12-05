@@ -68,8 +68,6 @@ object AppModule {
 
     /**
      * Migration from version 1 to 2: Add traffic tracking tables
-     * Since we're only adding new tables (not modifying existing ones),
-     * this migration is straightforward.
      */
     private val MIGRATION_1_2 = object : Migration(1, 2) {
         override fun migrate(database: SupportSQLiteDatabase) {
