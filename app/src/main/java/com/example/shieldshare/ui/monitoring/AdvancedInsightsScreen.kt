@@ -89,7 +89,7 @@ fun AdvancedInsightsScreen(
             )
 
             SparklineCard(
-                title = "CPU %",
+                title = "CPU % (App)",
                 subtitle =
                     uiState.latestSample?.cpuPercent?.takeIf { it >= 0 }
                         ?.let { "%.1f%%".format(it) } ?: "Collecting…",

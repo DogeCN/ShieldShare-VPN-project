@@ -228,8 +228,9 @@ object AppModule {
     @Singleton
     fun providePerformanceMonitor(
         @ApplicationContext context: Context,
-        trafficMeter: TrafficMeter
-    ): PerformanceMonitor = PerformanceMonitor(context, trafficMeter)
+        trafficMeter: TrafficMeter,
+        proxyServer: ProxyServer
+    ): PerformanceMonitor = PerformanceMonitor(context, trafficMeter, proxyServer)
 
     @Provides
     @Singleton

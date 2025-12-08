@@ -48,6 +48,13 @@ constructor(
                     ThemeMode.SYSTEM
                 }
 
+            val perfExportEnabled = appPrefs.getBoolean("perf_export_enabled", false)
+            val perfExportTreeUri = appPrefs.getString("perf_export_tree_uri", null)
+            
+            // Initialize PerformanceMonitor with saved export settings
+            performanceMonitor.setExportEnabled(perfExportEnabled)
+            performanceMonitor.setExportDestination(perfExportTreeUri)
+            
             _uiState.value =
                 SettingsUiState(
                     authEnabled = appPrefs.getBoolean("auth_enabled", false),
@@ -58,8 +65,8 @@ constructor(
                         appPrefs.getBoolean("notifications_enabled", true),
                     httpHttpsEnabled = appPrefs.getBoolean("http_https_enabled", true),
                     socks5Enabled = appPrefs.getBoolean("socks5_enabled", true),
-                    perfExportEnabled = appPrefs.getBoolean("perf_export_enabled", false),
-                    perfExportTreeUri = appPrefs.getString("perf_export_tree_uri", null),
+                    perfExportEnabled = perfExportEnabled,
+                    perfExportTreeUri = perfExportTreeUri,
                     // Quota settings (simplified)
                     quotaEnabled = appPrefs.getBoolean("quota_enabled", false),
                     quotaMode = appPrefs.getString("quota_mode", "") ?: "",

@@ -5,10 +5,12 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.net.Uri
 import android.os.BatteryManager
+import android.os.Process
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import com.example.shieldshare.managers.meter.TrafficMeter
 import com.example.shieldshare.managers.meter.TrafficTotals
+import com.example.shieldshare.managers.proxy.ProxyServer
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.BufferedWriter
 import java.io.File
@@ -31,14 +33,19 @@ import kotlinx.coroutines.launch
 @Singleton
 class PerformanceMonitor @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val trafficMeter: TrafficMeter
+    private val trafficMeter: TrafficMeter,
+    private val proxyServer: ProxyServer
 ) {
 
     companion object {
         private const val TAG = "PerformanceMonitor"
         private const val SAMPLE_INTERVAL_MS = 5_000L
         private const val MAX_HISTORY = 120 // ~10 minutes at 5s/sample
+        // Default clock ticks per second (jiffy rate) - typically 100 Hz on Android
+        private const val DEFAULT_CLK_TCK = 100L
     }
+    
+    private var clockTicksPerSecond: Long = DEFAULT_CLK_TCK
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val _latestSample = MutableStateFlow<PerformanceSample?>(null)
@@ -57,7 +64,10 @@ class PerformanceMonitor @Inject constructor(
     private var throughputWriter: BufferedWriter? = null
 
     private var lastCpuStat: CpuStat? = null
+    private var lastCpuStatTimestamp: Long? = null
     private var lastCpuPercent: Double? = null
+    private var lastProcessCpuTime: Long? = null
+    private var lastProcessCpuTimestamp: Long? = null
     private var lastTotals: TrafficTotals? = null
     private var lastAggUp: Long? = null
     private var lastAggDown: Long? = null
@@ -65,11 +75,25 @@ class PerformanceMonitor @Inject constructor(
     private var sessionStamp: String? = null
 
     init {
+        detectClockTicksPerSecond()
         startSampling()
+    }
+    
+    /**
+     * Try to detect the actual clock ticks per second (jiffy rate).
+     * Falls back to DEFAULT_CLK_TCK (100 Hz) if detection fails.
+     */
+    private fun detectClockTicksPerSecond() {
+        // Try to read from /proc/self/auxv (if accessible)
+        // Or we could use sysconf(_SC_CLK_TCK) via JNI, but that's complex
+        // For now, assume 100 Hz which is standard on Android
+        clockTicksPerSecond = DEFAULT_CLK_TCK
+        Log.d(TAG, "Using clock ticks per second: $clockTicksPerSecond Hz")
     }
 
     fun setExportEnabled(enabled: Boolean) {
         exportEnabled = enabled
+        Log.i(TAG, "CSV export ${if (enabled) "ENABLED" else "DISABLED"}")
         if (!enabled) {
             closeWriters()
         }
@@ -86,7 +110,14 @@ class PerformanceMonitor @Inject constructor(
                 val now = System.currentTimeMillis()
                 val batteryPct = readBatteryPct()
                 val cpuRaw = readCpuLoad()
-                val cpuPct = if (cpuRaw >= 0f) cpuRaw else (lastCpuPercent?.toFloat() ?: 0f)
+                val cpuPct =
+                    if (cpuRaw >= 0f) {
+                        cpuRaw
+                    } else {
+                        val fallback = (lastCpuPercent?.toFloat() ?: 0f)
+                        Log.w(TAG, "CPU read failed; using fallback=$fallback")
+                        fallback
+                    }
                 val charging = isCharging()
 
                 val stats = trafficMeter.getCurrentStats()
@@ -109,26 +140,41 @@ class PerformanceMonitor @Inject constructor(
                     downloadBps = 0
                 }
 
+            val activeConns =
+                try {
+                    proxyServer.getProxyInfo().activeConnections
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to read active connections", e)
+                    0
+                }
+
                 val sample =
                     PerformanceSample(
                         timestamp = now,
                         batteryLevel = batteryPct,
                         isCharging = charging,
                         cpuPercent = cpuPct.toDouble(),
-                        activeConnections = 0,
+                    activeConnections = activeConns,
                         totalUploadBytes = aggUp,
                         totalDownloadBytes = aggDown,
                         uploadRateBps = uploadBps.toDouble(),
                         downloadRateBps = downloadBps.toDouble()
                     )
                 _latestSample.value = sample
-                lastCpuPercent = cpuPct.toDouble()
+                if (cpuRaw >= 0f) {
+                    lastCpuPercent = cpuPct.toDouble()
+                }
                 _history.value =
                     (_history.value + sample).takeLast(MAX_HISTORY)
                 updateSummary(sample)
 
                 if (exportEnabled) {
                     writeSample(sample)
+                } else {
+                    // Log once per minute if export is disabled
+                    if (now % 60_000L < SAMPLE_INTERVAL_MS) {
+                        Log.d(TAG, "CSV export is disabled - enable in Settings to write CSV files")
+                    }
                 }
 
                 lastAggUp = aggUp
@@ -153,46 +199,103 @@ class PerformanceMonitor @Inject constructor(
     }
 
     private fun readCpuLoad(): Float {
-        return try {
-            val stat = readProcStat() ?: return -1f
+        // Try /proc/self/stat first (more reliable, updates frequently)
+        val procStat = readProcSelfStat()
+        if (procStat != null) {
             val prev = lastCpuStat
-            lastCpuStat = stat
-            if (prev == null) return -1f
+            val prevTs = lastCpuStatTimestamp
+            val now = System.currentTimeMillis()
+            lastCpuStat = procStat
+            lastCpuStatTimestamp = now
 
-            val totalDiff = (stat.total - prev.total).toFloat().coerceAtLeast(1f)
-            val idleDiff = (stat.idle - prev.idle).toFloat().coerceAtLeast(0f)
-            val usage = ((totalDiff - idleDiff) / totalDiff) * 100f
-            usage.coerceIn(0f, 100f)
+            if (prev != null && prevTs != null) {
+                // Process CPU time is in jiffies (clock ticks)
+                // Calculate CPU percentage: (CPU time used / wall-clock time) * 100
+                val cpuTimeDiffJiffies = (procStat.total - prev.total).coerceAtLeast(0L)
+                val wallTimeDiffMs = (now - prevTs).coerceAtLeast(1L)
+                // Convert jiffies to milliseconds: jiffies * (1000ms / clockTicksPerSecond)
+                val msPerJiffy = 1000L / clockTicksPerSecond
+                val cpuTimeDiffMs = cpuTimeDiffJiffies * msPerJiffy
+                val usage = ((cpuTimeDiffMs.toFloat() / wallTimeDiffMs.toFloat()) * 100f).coerceIn(0f, 100f)
+                Log.d(TAG, "readCpuLoad: /proc/self/stat usage=$usage% (cpuTime=${cpuTimeDiffMs}ms=${cpuTimeDiffJiffies}jiffies, wallTime=${wallTimeDiffMs}ms, clk_tck=${clockTicksPerSecond}Hz, prevTotal=${prev.total}, currTotal=${procStat.total})")
+                return usage
+            } else {
+                Log.d(TAG, "readCpuLoad: first /proc/self/stat sample (total=${procStat.total})")
+                return 0f
+            }
+        }
+
+        // Fallback to Process.getElapsedCpuTime() (may not update frequently enough)
+        val processCpu = readProcessCpuTime()
+        if (processCpu != null) {
+            val prevTime = lastProcessCpuTime
+            val prevTs = lastProcessCpuTimestamp
+            val now = System.currentTimeMillis()
+            lastProcessCpuTime = processCpu
+            lastProcessCpuTimestamp = now
+
+            if (prevTime != null && prevTs != null) {
+                val cpuTimeDiffMs = (processCpu - prevTime) / 1_000_000L // Convert ns to ms
+                val wallTimeDiffMs = (now - prevTs).coerceAtLeast(1L)
+                // CPU percentage = (CPU time / wall time) * 100
+                // This gives the app's CPU usage percentage
+                val usage = ((cpuTimeDiffMs.toFloat() / wallTimeDiffMs.toFloat()) * 100f).coerceIn(0f, 100f)
+                Log.d(TAG, "readCpuLoad: Process.getElapsedCpuTime() usage=$usage% (cpuTime=${cpuTimeDiffMs}ms, wallTime=${wallTimeDiffMs}ms, prev=${prevTime}ns, curr=${processCpu}ns)")
+                return usage
+            } else {
+                Log.d(TAG, "readCpuLoad: first Process.getElapsedCpuTime() sample (value=${processCpu}ns)")
+                return 0f
+            }
+        }
+
+        // Both methods failed - CPU unavailable
+        Log.w(TAG, "readCpuLoad: All CPU reading methods failed, CPU unavailable")
+        return -1f
+    }
+
+    /**
+     * Try to read /proc/self/stat (app's own process CPU stats).
+     * This is usually accessible even when /proc/stat is blocked.
+     * Returns CPU time in jiffies (clock ticks).
+     */
+    private fun readProcSelfStat(): CpuStat? {
+        return try {
+            val firstLine = File("/proc/self/stat").bufferedReader().useLines { lines ->
+                lines.firstOrNull()
+            } ?: return null
+            val parts = firstLine.split("\\s+".toRegex()).filter { it.isNotBlank() }
+            // /proc/self/stat format: pid comm state ppid ... utime stime cutime cstime ...
+            // utime (index 13) = user time in jiffies, stime (index 14) = system time in jiffies
+            if (parts.size < 15) {
+                Log.w(TAG, "readProcSelfStat: insufficient parts (${parts.size} < 15)")
+                return null
+            }
+            val utime = parts[13].toLongOrNull() ?: return null
+            val stime = parts[14].toLongOrNull() ?: return null
+            val total = utime + stime
+            Log.d(TAG, "readProcSelfStat: utime=${utime}jiffies, stime=${stime}jiffies, total=${total}jiffies")
+            // For process-level stats, we use total = utime + stime, idle = 0
+            // The percentage will be calculated based on how much CPU time the process used
+            // compared to wall-clock time (handled in readCpuLoad)
+            CpuStat(total = total, idle = 0L)
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to read CPU load", e)
-            -1f
+            Log.w(TAG, "Failed to read /proc/self/stat", e)
+            null
         }
     }
 
-    private fun readProcStat(): CpuStat? {
+    /**
+     * Fallback: Use Process.getElapsedCpuTime() to get app's CPU time.
+     * Returns CPU time in nanoseconds, or null if unavailable.
+     * Note: This method may not update frequently enough on some devices.
+     */
+    private fun readProcessCpuTime(): Long? {
         return try {
-            val firstLine = File("/proc/stat").bufferedReader().useLines { lines ->
-                lines.firstOrNull { it.startsWith("cpu ") }
-            } ?: return null
-            val parts = firstLine.split("\\s+".toRegex()).filter { it.isNotBlank() }
-            if (parts.size < 8) return null
-            val user = parts[1].toLong()
-            val nice = parts[2].toLong()
-            val system = parts[3].toLong()
-            val idle = parts[4].toLong()
-            val iowait = parts[5].toLong()
-            val irq = parts[6].toLong()
-            val softIrq = parts[7].toLong()
-            val steal = parts.getOrNull(8)?.toLongOrNull() ?: 0L
-            val guest = parts.getOrNull(9)?.toLongOrNull() ?: 0L
-            val guestNice = parts.getOrNull(10)?.toLongOrNull() ?: 0L
-
-            val idleAll = idle + iowait
-            val nonIdle = user + nice + system + irq + softIrq + steal + guest + guestNice
-            val total = idleAll + nonIdle
-            CpuStat(total = total, idle = idleAll)
+            val cpuTime = Process.getElapsedCpuTime()
+            Log.d(TAG, "readProcessCpuTime: raw value=${cpuTime}ns (${cpuTime / 1_000_000L}ms)")
+            cpuTime
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to read /proc/stat", e)
+            Log.w(TAG, "Failed to read Process.getElapsedCpuTime()", e)
             null
         }
     }
@@ -253,6 +356,10 @@ class PerformanceMonitor @Inject constructor(
                 write(lineThroughput)
                 flush()
             }
+            // Log periodically to confirm writes are happening
+            if (sample.timestamp % 30_000L < SAMPLE_INTERVAL_MS) {
+                Log.d(TAG, "Wrote CSV sample: CPU=${sample.cpuPercent}%, Battery=${sample.batteryLevel}%, Connections=${sample.activeConnections}")
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to write perf sample", e)
         }
@@ -274,12 +381,14 @@ class PerformanceMonitor @Inject constructor(
         if (treeUriString.isNullOrBlank()) {
             val perfDir = File(context.filesDir, "perf")
             if (!perfDir.exists()) perfDir.mkdirs()
+            Log.i(TAG, "CSV files will be written to: ${perfDir.absolutePath}")
             if (batteryWriter == null) {
                 val file = File(perfDir, battery)
                 val writer = FileWriter(file, true).buffered()
                 if (file.length() == 0L) writer.write("timestamp_ms,battery_pct,is_charging\n")
                 writer.flush()
                 batteryWriter = writer
+                Log.i(TAG, "Created battery CSV: ${file.name}")
             }
             if (cpuWriter == null) {
                 val file = File(perfDir, cpu)
@@ -287,6 +396,7 @@ class PerformanceMonitor @Inject constructor(
                 if (file.length() == 0L) writer.write("timestamp_ms,cpu_pct\n")
                 writer.flush()
                 cpuWriter = writer
+                Log.i(TAG, "Created CPU CSV: ${file.name}")
             }
             if (throughputWriter == null) {
                 val file = File(perfDir, throughput)
@@ -296,6 +406,7 @@ class PerformanceMonitor @Inject constructor(
                 }
                 writer.flush()
                 throughputWriter = writer
+                Log.i(TAG, "Created throughput CSV: ${file.name}")
             }
             return
         }
