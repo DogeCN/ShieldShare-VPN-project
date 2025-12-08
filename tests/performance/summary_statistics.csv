@@ -1,0 +1,5 @@
+,Mean,Std Dev,Min,Max,Median,Initial,Final,Change,Duration (hrs),Drop Rate (%/hr),Peak,Total (MB)
+CPU (%),15.77,9.01,0.00,75.00,14.94,,,,,,,
+Battery (%),,,,,,18.0,15.0,-3.0,0.25,-11.94,,
+Upload (Mbps),0.006,,,,,,,,,,0.030,5.90
+Download (Mbps),0.115,,,,,,,,,,0.938,104.84
