@@ -173,6 +173,11 @@ fun ShieldShareAppContent(onThemeChange: () -> Unit = {}, initialDestination: St
                     onBack = { navController.popBackStack() }
                 )
             }
+            composable("advancedInsights") {
+                com.example.shieldshare.ui.monitoring.AdvancedInsightsScreen(
+                    onBack = { navController.popBackStack() }
+                )
+            }
             composable("advanced-traffic-regulation") {
                 AdvancedTrafficRegulationScreen(navController = navController)
             }

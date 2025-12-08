@@ -1,5 +1,8 @@
 package com.example.shieldshare.ui.settings
 
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -11,6 +14,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -19,6 +23,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
+import androidx.compose.ui.platform.LocalContext
 import com.example.shieldshare.managers.proxy.ProxyPortManager
 import com.example.shieldshare.ui.theme.ThemeMode
 
@@ -33,6 +38,19 @@ fun SettingsScreen(
     var showClearConfirmationDialog by remember { mutableStateOf(false) }
     var showQuotaConfigDialog by remember { mutableStateOf(false) }
     var showFixedQuotaConfigDialog by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val exportFolderPicker =
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+            uri?.let {
+                val flags =
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                try {
+                    context.contentResolver.takePersistableUriPermission(it, flags)
+                } catch (_: Exception) {
+                }
+                viewModel.updatePerfExportTreeUri(it.toString())
+            }
+        }
 
     // Local state for quota dialog
     var quotaBandwidthText by remember { mutableStateOf("") }
@@ -383,6 +401,7 @@ fun SettingsScreen(
                                 }
                             )
                         }
+
                     }
                 }
             }
@@ -468,6 +487,57 @@ fun SettingsScreen(
                                         )
                                 }
                             )
+                        }
+
+                        // Performance CSV export (placed near traffic/quotas)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Export performance CSVs",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    text =
+                                        if (uiState.perfExportTreeUri.isNullOrBlank()) {
+                                            "Default: app sandbox (/data/data/<pkg>/files/perf). 5s samples: battery, CPU, throughput."
+                                        } else {
+                                            "Folder: ${uiState.perfExportTreeUri}"
+                                        },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = uiState.perfExportEnabled,
+                                onCheckedChange = { enabled ->
+                                    viewModel.updatePerfExportEnabled(enabled)
+                                }
+                            )
+                        }
+                        if (uiState.perfExportEnabled) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(
+                                        onClick = { exportFolderPicker.launch(null) },
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) { Text("Select export folder") }
+                                    if (!uiState.perfExportTreeUri.isNullOrBlank()) {
+                                        TextButton(onClick = { viewModel.updatePerfExportTreeUri(null) }) {
+                                            Text("Use sandbox")
+                                        }
+                                    }
+                                }
+                                Text(
+                                    text = "Sandbox pull: adb pull /data/data/<pkg>/files/perf ./perf-logs/",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
                         }
 
                         // Quota Mode Selection (only show when enabled)
