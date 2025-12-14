@@ -173,16 +173,23 @@ fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
                         icon = Icons.Default.Wifi,
                         title = "Proxy Server",
                         subtitle =
-                            if (!uiState.isHotspotEnabled)
-                                "Hotspot required"
-                            else if (uiState.isProxyRunning) {
-                                when (uiState.proxyType) {
-                                    ProxyType.HTTP_HTTPS -> "HTTP/HTTPS ${uiState.httpPort}"
-                                    ProxyType.SOCKS5 -> "SOCKS5 ${uiState.socks5Port}"
-                                    ProxyType.BOTH -> "HTTP/HTTPS ${uiState.httpPort} · SOCKS5 ${uiState.socks5Port}"
+                            when {
+                                // Show "Hotspot Required" when hotspot is not enabled
+                                // (regardless of VPN status - covers both cases: both off, or VPN on but hotspot off)
+                                !uiState.isHotspotEnabled -> "Hotspot Required"
+                                // Show "VPN Required" when hotspot is enabled but VPN is not connected
+                                uiState.isHotspotEnabled && !uiState.isVpnConnected -> "VPN Required"
+                                // Show proxy status when both are ready
+                                uiState.isProxyRunning -> {
+                                    when (uiState.proxyType) {
+                                        ProxyType.HTTP_HTTPS -> "HTTP/HTTPS ${uiState.httpPort}"
+                                        ProxyType.SOCKS5 -> "SOCKS5 ${uiState.socks5Port}"
+                                        ProxyType.BOTH -> "HTTP/HTTPS ${uiState.httpPort} · SOCKS5 ${uiState.socks5Port}"
+                                    }
                                 }
-                            } else "Not running",
-                        isDisabled = !uiState.isHotspotEnabled,
+                                else -> "Not running"
+                            },
+                        isDisabled = !uiState.isHotspotEnabled || !uiState.isVpnConnected,
                         onQrClick = { showQrDialog = true }
                     )
 

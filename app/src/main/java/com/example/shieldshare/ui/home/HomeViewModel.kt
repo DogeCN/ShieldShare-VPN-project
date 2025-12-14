@@ -124,11 +124,26 @@ constructor(
                                 }
                             }
                     }
+                    
+                    // If VPN connects and hotspot is already enabled, start proxy
+                    val currentState = _uiState.value
+                    val hotspotEnabled = currentState.isHotspotEnabled
+                    if (hotspotEnabled && !currentState.isProxyRunning) {
+                        Log.d("HomeViewModel", "VPN connected and hotspot enabled, starting proxy automatically")
+                        startProxyServer()
+                    }
                 } else {
                     // when disconnect, fresh the IP address
                     ipAutoJob?.cancel()
                     _uiState.value =
                         _uiState.value.copy(localIpAddress = null, publicIpAddress = null)
+                    
+                    // If VPN disconnects, stop proxy
+                    val currentState = _uiState.value
+                    if (currentState.isProxyRunning) {
+                        Log.d("HomeViewModel", "VPN disconnected, stopping proxy automatically")
+                        stopProxyServer()
+                    }
                 }
             }
         }
@@ -486,15 +501,24 @@ constructor(
                         updateServiceSessionState()
                     }
 
-                    // Auto-manage proxy based on hotspot state
+                    // Auto-manage proxy based on hotspot and VPN state
                     val currentState = _uiState.value
-                    if (isEnabled && !currentState.isProxyRunning) {
-                        // Hotspot is on but proxy is off - start proxy
-                        Log.d("HomeViewModel", "Hotspot enabled, starting proxy automatically")
+                    val vpnConnected = currentState.isVpnConnected
+                    
+                    // Start proxy only if both hotspot is enabled AND VPN is connected
+                    if (isEnabled && vpnConnected && !currentState.isProxyRunning) {
+                        // Both hotspot and VPN are ready - start proxy
+                        Log.d("HomeViewModel", "Hotspot enabled and VPN connected, starting proxy automatically")
                         startProxyServer()
-                    } else if (!isEnabled && currentState.isProxyRunning) {
-                        // Hotspot is off but proxy is on - stop proxy
-                        Log.d("HomeViewModel", "Hotspot disabled, stopping proxy automatically")
+                    } else if ((!isEnabled || !vpnConnected) && currentState.isProxyRunning) {
+                        // Either hotspot is off OR VPN is disconnected - stop proxy
+                        val reason = when {
+                            !isEnabled && !vpnConnected -> "Hotspot disabled and VPN disconnected"
+                            !isEnabled -> "Hotspot disabled"
+                            !vpnConnected -> "VPN disconnected"
+                            else -> "Unknown reason"
+                        }
+                        Log.d("HomeViewModel", "$reason, stopping proxy automatically")
                         stopProxyServer()
                     }
                 } catch (e: Exception) {
