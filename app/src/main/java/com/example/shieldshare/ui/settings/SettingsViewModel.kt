@@ -9,6 +9,7 @@ import com.example.shieldshare.data.prefs.AppPrefs
 import com.example.shieldshare.data.repository.TrafficRepository
 import com.example.shieldshare.managers.meter.TrafficMeter
 import com.example.shieldshare.managers.quota.QuotaManager
+import com.example.shieldshare.managers.performance.PerformanceMonitor
 import com.example.shieldshare.ui.theme.ThemeMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -26,6 +27,7 @@ constructor(
     private val trafficRepository: TrafficRepository,
     private val quotaManager: QuotaManager,
     private val trafficMeter: TrafficMeter,
+    private val performanceMonitor: PerformanceMonitor,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -46,6 +48,13 @@ constructor(
                     ThemeMode.SYSTEM
                 }
 
+            val perfExportEnabled = appPrefs.getBoolean("perf_export_enabled", false)
+            val perfExportTreeUri = appPrefs.getString("perf_export_tree_uri", null)
+            
+            // Initialize PerformanceMonitor with saved export settings
+            performanceMonitor.setExportEnabled(perfExportEnabled)
+            performanceMonitor.setExportDestination(perfExportTreeUri)
+            
             _uiState.value =
                 SettingsUiState(
                     authEnabled = appPrefs.getBoolean("auth_enabled", false),
@@ -56,6 +65,8 @@ constructor(
                         appPrefs.getBoolean("notifications_enabled", true),
                     httpHttpsEnabled = appPrefs.getBoolean("http_https_enabled", true),
                     socks5Enabled = appPrefs.getBoolean("socks5_enabled", true),
+                    perfExportEnabled = perfExportEnabled,
+                    perfExportTreeUri = perfExportTreeUri,
                     // Quota settings (simplified)
                     quotaEnabled = appPrefs.getBoolean("quota_enabled", false),
                     quotaMode = appPrefs.getString("quota_mode", "") ?: "",
@@ -154,6 +165,11 @@ constructor(
             // Save device idle timeout
             appPrefs.putInt("device_idle_timeout_minutes", state.deviceIdleTimeoutMinutes)
 
+            // Save perf export toggle
+            appPrefs.putBoolean("perf_export_enabled", state.perfExportEnabled)
+            performanceMonitor.setExportEnabled(state.perfExportEnabled)
+            performanceMonitor.setExportDestination(state.perfExportTreeUri)
+
             // Reload quota configuration
             quotaManager.loadConfig()
         }
@@ -186,6 +202,22 @@ constructor(
             )
         // Save settings and reload quota config
         saveSettings()
+    }
+
+    fun updatePerfExportEnabled(enabled: Boolean) {
+        _uiState.value = _uiState.value.copy(perfExportEnabled = enabled)
+        performanceMonitor.setExportEnabled(enabled)
+        appPrefs.putBoolean("perf_export_enabled", enabled)
+    }
+
+    fun updatePerfExportTreeUri(treeUri: String?) {
+        _uiState.value = _uiState.value.copy(perfExportTreeUri = treeUri)
+        if (treeUri != null) {
+            appPrefs.putString("perf_export_tree_uri", treeUri)
+        } else {
+            appPrefs.putString("perf_export_tree_uri", "")
+        }
+        performanceMonitor.setExportDestination(treeUri)
     }
 
     fun updateDeviceIdleTimeoutMinutes(minutes: Int) {
@@ -293,6 +325,8 @@ data class SettingsUiState(
     val notificationsEnabled: Boolean = true,
     val httpHttpsEnabled: Boolean = true,
     val socks5Enabled: Boolean = true,
+    val perfExportEnabled: Boolean = false,
+    val perfExportTreeUri: String? = null,
     val validationError: String? = null,
     // Clear database states
     val isClearingDatabase: Boolean = false,

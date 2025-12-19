@@ -23,7 +23,7 @@ import com.example.shieldshare.managers.sync.SyncManager
 import com.example.shieldshare.managers.sync.SyncManagerNoop
 import com.example.shieldshare.managers.vpn.VpnManager
 import com.example.shieldshare.managers.vpn.VpnManagerImpl
-import dagger.Module
+import dagger.Module 
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -228,9 +228,9 @@ object AppModule {
     @Singleton
     fun providePerformanceMonitor(
         @ApplicationContext context: Context,
-        proxyServer: ProxyServer,
-        trafficMeter: TrafficMeter
-    ): PerformanceMonitor = PerformanceMonitor(context, proxyServer, trafficMeter)
+        trafficMeter: TrafficMeter,
+        proxyServer: ProxyServer
+    ): PerformanceMonitor = PerformanceMonitor(context, trafficMeter, proxyServer)
 
     @Provides
     @Singleton

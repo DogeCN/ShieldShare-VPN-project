@@ -433,15 +433,40 @@ fun MonitoringDashboardScreen(
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text =
-                            "Track host battery, CPU load, and throughput for the current session.",
+                        text = "View live and detailed host performance.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Button(
-                        onClick = { navController?.navigate("performance") },
-                        enabled = navController != null
-                    ) { Text("Open performance screen") }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Button(
+                            modifier = Modifier.weight(1f),
+                                onClick = { navController?.navigate("performance") },
+                            enabled = navController != null,
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(
+                                text = "Performance Insights",
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1
+                            )
+                        }
+                        Button(
+                            modifier = Modifier.weight(1f),
+                            onClick = { navController?.navigate("advancedInsights") },
+                            enabled = navController != null,
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                        ) {
+                            Text(
+                                text = "Advanced Insights",
+                                style = MaterialTheme.typography.labelLarge,
+                                maxLines = 1
+                            )
+                        }
+                    }
                 }
             }
         }

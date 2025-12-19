@@ -84,7 +84,7 @@ fun PerformanceScreen(
             }
             item {
                 ExpandablePerformanceSection(
-                    title = "CPU & Connections",
+                    title = "CPU (App) & Connections",
                     content = {
                         CpuSectionContent(uiState.value)
                     }
@@ -127,7 +127,11 @@ private fun PerformanceSummaryCard(uiState: PerformanceUiState) {
                 style = MaterialTheme.typography.bodyMedium
             )
             Text(
-                text = "Avg CPU: ${summary.averageCpuPercent.roundToInt()}% • Peak CPU: ${summary.peakCpuPercent.roundToInt()}%",
+                text = if (summary.averageCpuPercent < 0 || summary.peakCpuPercent < 0) {
+                    "CPU: Unavailable"
+                } else {
+                    "Avg CPU (App): ${summary.averageCpuPercent.roundToInt()}% • Peak CPU (App): ${summary.peakCpuPercent.roundToInt()}%"
+                },
                 style = MaterialTheme.typography.bodyMedium
             )
         }
@@ -161,16 +165,16 @@ private fun CpuSectionContent(uiState: PerformanceUiState) {
     val latest = summary.latestSample
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         StatRow(
-            label = "Current CPU",
-            value = "${latest.cpuPercent.roundToInt()}%"
+            label = "Current CPU (App)",
+            value = if (latest.cpuPercent < 0) "N/A" else "${latest.cpuPercent.roundToInt()}%"
         )
         StatRow(
-            label = "Average CPU",
-            value = "${summary.averageCpuPercent.roundToInt()}%"
+            label = "Average CPU (App)",
+            value = if (summary.averageCpuPercent < 0) "N/A" else "${summary.averageCpuPercent.roundToInt()}%"
         )
         StatRow(
-            label = "Peak CPU",
-            value = "${summary.peakCpuPercent.roundToInt()}%"
+            label = "Peak CPU (App)",
+            value = if (summary.peakCpuPercent < 0) "N/A" else "${summary.peakCpuPercent.roundToInt()}%"
         )
         StatRow(
             label = "Active connections",

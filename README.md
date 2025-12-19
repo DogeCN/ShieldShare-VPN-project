@@ -37,6 +37,7 @@ This project explores how to extend the functionality of a stock Android phone (
 - **Quota Manager** - Traffic quota allocation and enforcement
 - **Traffic Filter Manager** - Content filtering and access control
 - **Consumption Tracker** - Abuse detection and monitoring
+- **Performance Monitor** - Real-time system resource tracking (process-specific CPU, battery, throughput) with CSV export
 - **Database Layer** - Room database for persistent storage of sessions, stats, and traffic records
 - **QR Code Generator** - Client configuration automation with PAC file support
 
@@ -109,7 +110,7 @@ This project explores how to extend the functionality of a stock Android phone (
 - **Data Persistence**: Room database for session tracking and statistics
 - **Quota Management**: Per-client bandwidth allocation and enforcement
 - **Traffic Filtering**: Content filtering and access control
-- **Performance Monitoring**: System resource usage tracking
+- **Performance Monitoring**: Process-specific CPU tracking, battery consumption analysis, network throughput measurement, and CSV export for performance analysis
 
 ## Current Status
 
@@ -124,7 +125,7 @@ This project explores how to extend the functionality of a stock Android phone (
 - **Traffic Metering** - Per-client traffic statistics with database persistence
 - **Quota Management** - Bandwidth allocation, enforcement, and blocking
 - **Session Tracking** - Client sessions and service sessions stored in Room database
-- **Performance Monitoring** - CPU, memory, and network usage tracking
+- **Performance Monitoring** - Real-time system resource tracking with process-specific CPU monitoring, battery consumption analysis, network throughput measurement, and CSV export capabilities
 - **Advanced Traffic Regulation** - Quota configuration and traffic filtering
 - **Settings Management** - Comprehensive app configuration
 
@@ -326,7 +327,7 @@ The app includes the following main screens:
 - **Home Screen**: Proxy server control, VPN status, hotspot management, QR code generation
 - **Monitoring Dashboard**: Real-time client detection, traffic statistics, session tracking
 - **Settings**: App configuration, theme preferences, proxy settings, quota configuration
-- **Performance Screen**: System resource monitoring (CPU, memory, network)
+- **Performance Screen**: Real-time system resource monitoring with process-specific CPU tracking (via `/proc/self/stat`), battery level monitoring, network throughput analysis, active connection tracking, and CSV data export for performance analysis
 - **Advanced Traffic Regulation**: Quota management, traffic filtering, consumption tracking
 
 ---

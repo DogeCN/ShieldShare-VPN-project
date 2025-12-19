@@ -32,7 +32,7 @@ class PerformanceViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            performanceMonitor.samples.collect { samples ->
+            performanceMonitor.history.collect { samples ->
                 _uiState.value = _uiState.value.copy(recentSamples = samples)
             }
         }
