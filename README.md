@@ -334,4 +334,5 @@ The app includes the following main screens:
 
 **Project Status**: Active Development  
 **Team**: Carlos Semeho Edorh, Hanchen Ye, Jialu Bi  
-**Supervisor**: Maryam Tanha
+**Supervisor**: Maryam Tanha  
+**Acknowledgments**: Logan Schmidt
