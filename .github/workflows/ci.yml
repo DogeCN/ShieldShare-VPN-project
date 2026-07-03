@@ -42,8 +42,8 @@ jobs:
       - name: Debug info
         run: ./gradlew --version
 
-      - name: Run detekt check
-        run: ./gradlew ktlintCheck --continue || true
+      - name: Android lint
+        run: ./gradlew lintDebug --continue || true
 
       - name: Unit tests
         run: ./gradlew testDebugUnitTest
